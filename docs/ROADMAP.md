@@ -21,6 +21,10 @@
 - [x] `core/export/iptvsimple.py` detection and setup values
 - [x] `service.py` scheduled rebuild
 - [x] `tools/export_cli.py` for verification without Kodi
+- [x] Verified against a real provider (2026-08-10): auth, 262 live categories, an export of
+      219 channels over 5 categories with unique `tvg-chno` and correct `tvg-id`, and a stream
+      from that playlist fetched with the exported User-Agent returning
+      `200 video/mp2t`, 13.5 MB in 10 s
 - [ ] Verified in a running Kodi 21 with the EPG grid populated
 
 ## Phase 4 — VOD and Series
