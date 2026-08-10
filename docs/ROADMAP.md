@@ -31,7 +31,12 @@
 
 - [x] Category and item browsing, artwork, metadata
 - [x] Seasons and episodes
-- [x] Playback with inputstream selection and fallback
+- [x] Playback with inputstream selection
+- [x] Verified against a real provider (2026-08-10) with `export_cli.py --catalogue`:
+      212 movie categories, `get_vod_info` populated, `.mp4` served as `200 video/mp4`;
+      73 series categories, seasons and episodes parsed, `.mkv` served as
+      `200 video/x-matroska`
+- [ ] Strip the redundant "<show> - S01E01 - " prefix some panels put in episode titles
 
 ## Phase 5 — plain M3U sources
 

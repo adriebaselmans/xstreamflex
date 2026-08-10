@@ -49,6 +49,9 @@ def main() -> int:
                         help="Export only the first N categories (for quick iteration)")
     parser.add_argument("--cache", default="", help="Optional cache database path")
     parser.add_argument("--diagnostics", action="store_true", help="Probe the provider first")
+    parser.add_argument("--catalogue", action="store_true",
+                        help="Check VOD and series instead of exporting: counts, one movie "
+                             "and one episode, and whether their URLs actually serve video")
     parser.add_argument("--verbose", action="store_true", help="Log every request")
     args = parser.parse_args()
 
@@ -80,6 +83,9 @@ def main() -> int:
         if args.diagnostics:
             print(run_diagnostics(config, client).as_text())
             print()
+
+        if args.catalogue:
+            return check_catalogue(provider, client)
 
         if config.kind == KIND_XTREAM:
             account = provider.account()
@@ -124,6 +130,80 @@ def main() -> int:
             if index >= 12:
                 break
             print("  " + scrub(line.rstrip()))
+    return 0
+
+
+def check_catalogue(provider, client) -> int:
+    """Exercise the VOD and series paths against a real panel.
+
+    Everything about them is currently only tested against hand-written fixtures, and
+    panels differ most in exactly these responses: container extensions, whether
+    ``get_vod_info`` is populated at all, how seasons are keyed.
+
+    Probes exactly two media URLs, because an account may allow only one connection
+    and each probe briefly uses it.
+    """
+    from core.errors import ProviderError
+
+    for kind, label in (("vod", "Movies"), ("series", "Series")):
+        print("== %s ==" % label)
+        try:
+            categories = provider.categories(kind)
+        except ProviderError as exc:
+            print("  categories failed: %s" % exc.message)
+            continue
+        print("  categories: %d" % len(categories))
+        if not categories:
+            continue
+
+        # Walk until a non-empty category turns up; the first one is often empty.
+        items, used = [], None
+        for category in categories[:10]:
+            try:
+                items = (provider.movies(category.id) if kind == "vod"
+                         else provider.series(category.id))
+            except ProviderError as exc:
+                print("  '%s' failed: %s" % (category.name, exc.message))
+                continue
+            if items:
+                used = category
+                break
+        if not items or used is None:
+            print("  no items found in the first 10 categories")
+            continue
+        print("  '%s': %d items, first = %s" % (used.name, len(items), items[0].name))
+
+        if kind == "vod":
+            movie = items[0]
+            print("  container extension: %r" % movie.container_extension)
+            try:
+                info = provider.movie_info(movie.id)
+                print("  get_vod_info keys: %s"
+                      % ", ".join(sorted(info)[:6]) if info else "  get_vod_info: empty")
+            except ProviderError as exc:
+                print("  get_vod_info failed: %s" % exc.message)
+            ref = provider.movie_stream(movie)
+        else:
+            try:
+                show, episodes = provider.series_info(items[0].id)
+            except ProviderError as exc:
+                print("  get_series_info failed: %s" % exc.message)
+                continue
+            seasons = sorted({e.season for e in episodes})
+            print("  '%s': %d episodes across seasons %s"
+                  % (show.name, len(episodes), seasons or "none"))
+            if not episodes:
+                continue
+            print("  first episode: s%02de%02d %r, extension %r"
+                  % (episodes[0].season, episodes[0].episode, episodes[0].title,
+                     episodes[0].container_extension))
+            ref = provider.episode_stream(episodes[0])
+
+        probe = client.probe(ref.url, headers=ref.headers, max_bytes=131072, timeout=(8, 20))
+        print("  playback: status=%s type=%s bytes=%d%s" % (
+            probe.status, probe.content_type or "-", probe.bytes_read,
+            "" if probe.ok else "  <-- FAILED: %s" % (probe.error or "refused"),
+        ))
     return 0
 
 
