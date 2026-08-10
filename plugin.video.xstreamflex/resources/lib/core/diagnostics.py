@@ -208,7 +208,9 @@ def run_diagnostics(config: ProviderConfig, client: HttpClient,
     announce("Testing without User-Agent")
     bare = client.probe(
         provider.live_url(sample_channel_id, "ts"),
-        headers={"User-Agent": ""}, max_bytes=8192, timeout=(8, 15),
+        # None removes the session header entirely. An empty string would still send
+        # "User-Agent:", which is a different request and not what we are testing.
+        headers={"User-Agent": None}, max_bytes=8192, timeout=(8, 15),
     )
     if bare.ok and bare.bytes_read:
         report.add("Stream without User-Agent", INFO,

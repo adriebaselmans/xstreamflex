@@ -24,8 +24,16 @@ pip install pytest requests
 pytest -q
 ```
 
-The suite never touches the network. Every provider response is a fixture in `tests/fixtures/`,
-including the malformed shapes real panels return.
+Every provider response is a fixture in `tests/fixtures/`, including the malformed shapes real
+panels return. No test contacts a provider. Two diagnostics tests do perform a DNS lookup for an
+intentionally unresolvable name, so the suite is not strictly offline, but it never opens a
+connection to anything real.
+
+`tests/kodistubs.py` provides stand-ins for `xbmc`, `xbmcgui`, `xbmcplugin`, `xbmcaddon` and
+`xbmcvfs`, so `tests/test_kodiui.py` and `tests/test_service.py` exercise the Kodi layer too. The
+stubs are deliberately strict — the InfoTag stub accepts only setter names that genuinely exist in
+Kodi 20/21, and `xbmcaddon.Addon` raises for add-ons it has not been told are installed — because a
+lenient stub would let exactly the bugs it exists to catch pass through.
 
 ## The layering check
 
@@ -49,9 +57,11 @@ python3 tools/export_cli.py \
   --out /tmp/channels.m3u
 ```
 
-It prompts for the password (never echoed, never in shell history), fetches categories and channels
-through the same `core/` code the add-on uses, writes the M3U, and prints a summary plus the first
-few entries. Add `--diagnostics` to run the full provider probe first, `--limit N` to export only the
+It prompts for the password — there is deliberately no `--password` flag, because an argument lands
+in shell history and in the process table. Use `--password-stdin` for scripting. It fetches
+categories and channels through the same `core/` code the add-on uses, writes the M3U, and prints a
+summary plus the first few entries with the credentials masked. The written playlist itself
+necessarily contains them, as every Xtream client's does. Add `--diagnostics` to run the full provider probe first, `--limit N` to export only the
 first N categories while iterating.
 
 ## Diagnose a provider from the shell

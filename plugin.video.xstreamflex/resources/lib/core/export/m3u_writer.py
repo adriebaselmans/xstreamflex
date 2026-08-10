@@ -46,7 +46,9 @@ def write_m3u(
     result = ExportResult(path=path)
     groups = set()
     seen_ids = set()
+    used_numbers = set()
     number = 0
+    next_free = 1
 
     handle = tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", newline="\n", dir=directory,
@@ -74,11 +76,25 @@ def write_m3u(
                 group = channel.group or channel.category_id or "Ungrouped"
                 groups.add(group)
 
-                chno = number if renumber else (channel.number or number)
+                # Xtream's `num` is an index *within a category*, so across 262
+                # categories the same number comes back hundreds of times. Keep a
+                # provider number only while it is still unique; otherwise hand out
+                # the next free one, so IPTV Simple is not left to break ties itself.
+                if renumber or not channel.number or channel.number in used_numbers:
+                    while next_free in used_numbers:
+                        next_free += 1
+                    chno = next_free
+                else:
+                    chno = channel.number
+                used_numbers.add(chno)
+
                 handle.write(
                     '#EXTINF:-1 tvg-id="%s" tvg-name="%s" tvg-chno="%d" tvg-logo="%s"'
                     ' group-title="%s",%s\n' % (
-                        _escape_attr(channel.epg_channel_id or channel.id),
+                        # Only a real EPG id belongs here. Falling back to the stream
+                        # id would emit a tvg-id that matches nothing in the XMLTV
+                        # feed and block IPTV Simple's name-based matching.
+                        _escape_attr(channel.epg_channel_id),
                         _escape_attr(channel.name),
                         chno,
                         _escape_attr(channel.logo),

@@ -46,7 +46,7 @@ def build_list_item(ref: StreamRef, label: str = "") -> xbmcgui.ListItem:
     # Kodi's |Key=value form. A provider that answers 454 without a User-Agent will
     # fail every other way of passing them.
     url = ref.url + header_suffix(ref.headers)
-    item = xbmcgui.ListItem(label=label or "", path=url)
+    item = xbmcgui.ListItem(label=label or "", path=url, offscreen=True)
 
     is_hls = ".m3u8" in ref.url.split("?", 1)[0]
     inputstream = ref.inputstream
@@ -85,5 +85,5 @@ def resolve(handle: int, ref: StreamRef, label: str = "",
 
 
 def fail(handle: int, message: str) -> None:
-    xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
+    xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem(offscreen=True))
     xbmcgui.Dialog().notification("XstreamFlex", message, xbmcgui.NOTIFICATION_ERROR, 5000)

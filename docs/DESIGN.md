@@ -28,13 +28,13 @@ plugin.video.xstreamflex/
           m3u.py                M3UProvider
         export/
           m3u_writer.py         write_m3u()
+          exporter.py           export_channels(), the cross-process export lock
           iptvsimple.py         IPTV Simple detection + setup hints
       kodiui/
         __init__.py
         router.py
         listing.py
         play.py
-        settings.py
         dialogs.py
 tools/
   iptv-diag.sh                  standalone shell diagnostics
@@ -201,7 +201,8 @@ reproducible across runs.
 ## core/export/m3u_writer.py
 
 ```python
-def write_m3u(path, channels, *, provider, user_agent, url_for, groups=None) -> ExportResult
+def write_m3u(path, channels, url_for, *, user_agent, referer="",
+              extra_props=None, renumber=False) -> ExportResult
 ```
 
 Writes atomically: a temporary file in the same directory, `flush` + `fsync`, then `os.replace`.
@@ -210,7 +211,7 @@ IPTV Simple may read the file at any moment, and a half-written playlist is wors
 Per channel:
 
 ```
-#EXTINF:-1 tvg-id="..." tvg-name="..." tvg-chno="12" tvg-logo="..." group-title="...",Channel Name
+#EXTINF:-1 tvg-id="npo1.nl" tvg-name="..." tvg-chno="12" tvg-logo="..." group-title="...",Channel Name
 #EXTVLCOPT:http-user-agent=<ua>
 #KODIPROP:mimetype=video/mp2t
 http://host:8080/live/user/pass/12345.ts
@@ -221,6 +222,15 @@ refuses UA-less media requests with 454, and IPTV Simple's global `defaultUserAg
 user to miss. `#KODIPROP:mimetype` is written only for `.ts`, where it measurably speeds up player
 selection; HLS is left for Kodi to sniff.
 
+`tvg-id` carries the provider's `epg_channel_id` and is left **empty** when there is none. Falling
+back to the stream id would emit an identifier that appears in no XMLTV feed, and would also stop
+IPTV Simple from matching that channel by name instead.
+
+`tvg-chno` cannot simply mirror the API's `num`: that value is an index *within a category*, so
+across 262 categories the same number returns hundreds of times. The writer keeps a provider number
+while it is still unique and otherwise hands out the next free one, so IPTV Simple is never left to
+break ties on its own.
+
 `ExportResult` carries counts, the output path, and any channels skipped with the reason, so the UI
 can report "4 812 channels in 262 groups, 3 skipped (no stream id)".
 
@@ -229,7 +239,14 @@ matches what every other client writes; the file is created with mode `0600`.
 
 ## core/export/iptvsimple.py
 
-Detects whether `pvr.iptvsimple` is installed and which instance settings file applies. Since Kodi
+Detects whether `pvr.iptvsimple` is installed and which instance settings file applies.
+
+One subtlety decides whether this works at all. Kodi writes `default="true"` on any setting still at
+its schema value, and on load it reads the element and then calls `Reset()` on it. Writing a value
+without removing that attribute means Kodi silently discards it — and on a fresh IPTV Simple install
+every setting we care about carries the attribute. `apply_plan` therefore strips `default` from every
+element it touches. Without that, `m3uPathType` reverts to "remote URL", the exported playlist is
+never read, and the add-on reports success anyway. Since Kodi
 20, IPTV Simple stores per-instance settings in
 `userdata/addon_data/pvr.iptvsimple/instance-settings-<n>.xml`, and the ids in the add-on's own
 `settings.xml` are marked `hidden_obsolete` and kept only for migration.
@@ -257,7 +274,7 @@ customisation, so it is not used.
 
 ## core/diagnostics.py
 
-`run_diagnostics(config, progress_cb) -> DiagnosticsReport` — the shell script's checks, in Python,
+`run_diagnostics(config, client, progress=None, sample_channel_id="") -> DiagnosticsReport` — the shell script's checks, in Python,
 against the configured provider:
 
 1. DNS resolution and TCP connect to the panel host and port.
@@ -298,8 +315,13 @@ play channels through a path with no EPG and no channel numbering.
 `play.py` resolves a `StreamRef` and applies headers by appending them to the URL in Kodi's
 `|Header=value` form, which is the only mechanism that survives the hand-off to the player. It picks
 `inputstream.adaptive` for HLS when installed, `inputstream.ffmpegdirect` for MPEG-TS when installed,
-and otherwise leaves Kodi's default. On failure it walks the fallback chain (`ts` → `m3u8` →
-`direct_source`) once before reporting.
+and otherwise leaves Kodi's default.
+
+`StreamRef.alternatives` carries the `ts` → `m3u8` → `direct_source` chain, but **nothing consumes it
+yet**. Automatic failover would mean probing a second URL, and on a `max_connections: 1` account that
+probe competes with the stream the user is already trying to watch. Choosing between "retry
+automatically" and "respect the connection limit" needs a real box to measure on, so for now the
+chain is data the UI does not act on. Tracked in [ROADMAP.md](ROADMAP.md).
 
 `listing.py` builds `ListItem`s and fills `InfoTagVideo` through the Kodi 20+ setters
 (`xbmc.InfoTagVideo`), not the removed `setInfo()` dictionary API, and sets `mediatype` so Kodi's

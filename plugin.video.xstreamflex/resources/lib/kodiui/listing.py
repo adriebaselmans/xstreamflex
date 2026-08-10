@@ -5,7 +5,7 @@ dictionary API, so this works on Omega without deprecation spam.
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 from urllib.parse import urlencode
 
 import xbmcgui
@@ -47,7 +47,7 @@ def _apply_video_info(item: xbmcgui.ListItem, *, title: str, plot: str = "",
 
 def folder_item(label: str, url: str, *, icon: str = "", plot: str = "",
                 fanart: str = "") -> Tuple[str, xbmcgui.ListItem, bool]:
-    item = xbmcgui.ListItem(label=label)
+    item = xbmcgui.ListItem(label=label, offscreen=True)
     art = {}
     if icon:
         art.update({"icon": icon, "thumb": icon})
@@ -61,7 +61,7 @@ def folder_item(label: str, url: str, *, icon: str = "", plot: str = "",
 
 
 def movie_item(base_url: str, movie: Movie) -> Tuple[str, xbmcgui.ListItem, bool]:
-    item = xbmcgui.ListItem(label=movie.name)
+    item = xbmcgui.ListItem(label=movie.name, offscreen=True)
     item.setArt({"icon": movie.icon, "thumb": movie.icon, "poster": movie.icon})
     _apply_video_info(
         item, title=movie.name, plot=movie.plot, mediatype="movie",
@@ -74,7 +74,7 @@ def movie_item(base_url: str, movie: Movie) -> Tuple[str, xbmcgui.ListItem, bool
 
 
 def series_item(base_url: str, series: Series) -> Tuple[str, xbmcgui.ListItem, bool]:
-    item = xbmcgui.ListItem(label=series.name)
+    item = xbmcgui.ListItem(label=series.name, offscreen=True)
     item.setArt({"icon": series.cover, "thumb": series.cover, "poster": series.cover})
     _apply_video_info(
         item, title=series.name, plot=series.plot, mediatype="tvshow",
@@ -86,7 +86,7 @@ def series_item(base_url: str, series: Series) -> Tuple[str, xbmcgui.ListItem, b
 def episode_item(base_url: str, episode: Episode,
                  show_title: str = "") -> Tuple[str, xbmcgui.ListItem, bool]:
     label = "%dx%02d. %s" % (episode.season, episode.episode, episode.title)
-    item = xbmcgui.ListItem(label=label)
+    item = xbmcgui.ListItem(label=label, offscreen=True)
     if episode.thumb:
         item.setArt({"icon": episode.thumb, "thumb": episode.thumb})
     _apply_video_info(
@@ -105,7 +105,7 @@ def channel_item(base_url: str, channel: Channel,
     label = channel.name
     if now_next:
         label = "%s  ·  %s" % (channel.name, now_next)
-    item = xbmcgui.ListItem(label=label)
+    item = xbmcgui.ListItem(label=label, offscreen=True)
     if channel.logo:
         item.setArt({"icon": channel.logo, "thumb": channel.logo})
     _apply_video_info(item, title=channel.name, plot=now_next)

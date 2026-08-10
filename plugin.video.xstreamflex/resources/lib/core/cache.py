@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import time
-from typing import Any, Optional
+from typing import Any
 
 # Seconds. Tuned to how often each kind of data actually changes upstream.
 TTL_ACCOUNT = 3600

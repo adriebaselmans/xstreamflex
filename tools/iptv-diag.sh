@@ -24,12 +24,30 @@ trap 'rm -rf "$TMP"' EXIT
 read -rsp 'Password: ' PASS; echo
 [ -n "$STREAM_ID" ] || read -rp 'A stream id to test (blank to auto-pick): ' STREAM_ID
 
-# mask the password and username in everything on its way to the log
-scrub() { sed -e "s/$PASS/***/g" -e "s/$USER/USER/g"; }
+# Mask the password and username in everything on its way to the log.
+# Done with a fixed-string replacement rather than sed: a password containing / or
+# a BRE metacharacter would either break the s-expression (producing an EMPTY log
+# while still claiming to be masked) or fail to match itself and leak through.
+scrub() { PASS="$PASS" USER="$USER" python3 -c '
+import os, sys
+secrets = [(os.environ.get("PASS", ""), "***"), (os.environ.get("USER", ""), "USER")]
+for line in sys.stdin:
+    for needle, mask in secrets:
+        if needle:
+            line = line.replace(needle, mask)
+    sys.stdout.write(line)
+' 2>/dev/null || cat; }
 log() { printf '%s\n' "$*" | scrub | tee -a "$OUT"; }
 hdr() { log ""; log "===== $* ====="; }
 
 api() { printf '%s/player_api.php?username=%s&password=%s%s' "$BASE" "$USER" "$PASS" "$1"; }
+
+# curl puts its arguments in the process table, where any local user can read them
+# with ps. Passing the URL through a config file on stdin keeps the password out.
+curlq() {
+  local url="$1"; shift
+  printf 'url = "%s"\n' "$url" | curl -K - "$@"
+}
 
 W='status=%{http_code} bytes=%{size_download} time=%{time_total}s speed=%{speed_download}B/s redirect=%{redirect_url}\n'
 
@@ -47,7 +65,7 @@ else
 fi
 
 hdr "2. Account (player_api with no action)"
-curl -s -m 20 -A "$UA" "$(api '')" -o "$TMP/acct.json" \
+curlq "$(api '')" -s -m 20 -A "$UA" -o "$TMP/acct.json" \
   -w "$W" 2>&1 | scrub | tee -a "$OUT"
 if command -v python3 >/dev/null; then
   python3 - "$TMP/acct.json" <<'PY' 2>&1 | scrub | tee -a "$OUT"
@@ -65,7 +83,7 @@ else
 fi
 
 hdr "3. Live categories"
-curl -s -m 30 -A "$UA" "$(api '&action=get_live_categories')" -o "$TMP/cats.json" \
+curlq "$(api '&action=get_live_categories')" -s -m 30 -A "$UA" -o "$TMP/cats.json" \
   -w "$W" 2>&1 | scrub | tee -a "$OUT"
 CAT=$(python3 -c '
 import json,sys
@@ -78,7 +96,7 @@ log "first category_id: ${CAT:-none}"
 
 hdr "4. Channels in the first category"
 if [ -n "${CAT:-}" ]; then
-  curl -s -m 60 -A "$UA" "$(api "&action=get_live_streams&category_id=$CAT")" -o "$TMP/ch.json" \
+  curlq "$(api "&action=get_live_streams&category_id=$CAT")" -s -m 60 -A "$UA" -o "$TMP/ch.json" \
     -w "$W" 2>&1 | scrub | tee -a "$OUT"
   log "channels: $(python3 -c 'import json;print(len(json.load(open("'"$TMP"'/ch.json"))))' 2>/dev/null || echo '? parse failed')"
   if [ -z "$STREAM_ID" ]; then
@@ -95,7 +113,7 @@ fi
 hdr "5. get.php m3u_plus -- this is what IPTV Simple needs"
 for Q in "type=m3u_plus" "type=m3u_plus&output=ts" "type=m3u_plus&output=m3u8"; do
   log "-- variant: $Q"
-  curl -s -m 180 -A "$UA" "$BASE/get.php?username=$USER&password=$PASS&$Q" \
+  curlq "$BASE/get.php?username=$USER&password=$PASS&$Q" -s -m 180 -A "$UA" \
     -o "$TMP/pl.m3u" -w "$W" 2>&1 | scrub | tee -a "$OUT"
   log "   lines=$(wc -l < "$TMP/pl.m3u")  EXTINF=$(grep -c '^#EXTINF' "$TMP/pl.m3u" || true)"
   log "   last line: $(tail -1 "$TMP/pl.m3u" | head -c 100)"
@@ -103,18 +121,18 @@ for Q in "type=m3u_plus" "type=m3u_plus&output=ts" "type=m3u_plus&output=m3u8"; 
 done
 
 hdr "6. get.php WITHOUT a User-Agent"
-curl -s -m 180 -H 'User-Agent:' "$BASE/get.php?username=$USER&password=$PASS&type=m3u_plus" \
+curlq "$BASE/get.php?username=$USER&password=$PASS&type=m3u_plus" -s -m 180 -H 'User-Agent:' \
   -o "$TMP/pl2.m3u" -w "$W" 2>&1 | scrub | tee -a "$OUT"
 log "   lines=$(wc -l < "$TMP/pl2.m3u")  EXTINF=$(grep -c '^#EXTINF' "$TMP/pl2.m3u" || true)"
 
 hdr "7. XMLTV EPG"
-curl -s -m 300 -A "$UA" "$BASE/xmltv.php?username=$USER&password=$PASS" \
+curlq "$BASE/xmltv.php?username=$USER&password=$PASS" -s -m 300 -A "$UA" \
   -o "$TMP/epg.xml" -w "$W" 2>&1 | scrub | tee -a "$OUT"
 log "   programmes=$(grep -c '<programme' "$TMP/epg.xml" 2>/dev/null || echo 0)"
 log "   closes with </tv>: $(tail -c 200 "$TMP/epg.xml" | grep -q '</tv>' && echo yes || echo NO-TRUNCATED)"
 
 hdr "8. Short EPG through the API (alternative)"
-curl -s -m 30 -A "$UA" "$(api "&action=get_short_epg&stream_id=$STREAM_ID&limit=2")" \
+curlq "$(api "&action=get_short_epg&stream_id=$STREAM_ID&limit=2")" -s -m 30 -A "$UA" \
   -o "$TMP/sepg.json" -w "$W" 2>&1 | scrub | tee -a "$OUT"
 head -c 400 "$TMP/sepg.json" | scrub | tee -a "$OUT"; echo | tee -a "$OUT"
 
@@ -122,22 +140,22 @@ hdr "9. Fetching a stream"
 for EXT in ts m3u8 ""; do
   URL="$BASE/live/$USER/$PASS/$STREAM_ID${EXT:+.$EXT}"
   log "-- ext: ${EXT:-none}"
-  curl -s -o /dev/null -m 15 -A "$UA" -L \
+  curlq "$URL" -s -o /dev/null -m 15 -A "$UA" -L \
     -w "   status=%{http_code} type=%{content_type} bytes=%{size_download} finalurl=%{url_effective}\n" \
-    "$URL" 2>&1 | scrub | tee -a "$OUT"
+    2>&1 | scrub | tee -a "$OUT"
 done
 
 hdr "10. Stream WITHOUT a User-Agent"
-curl -s -o /dev/null -m 15 -H 'User-Agent:' -L \
+curlq "$BASE/live/$USER/$PASS/$STREAM_ID.ts" -s -o /dev/null -m 15 -H 'User-Agent:' -L \
   -w "   status=%{http_code} type=%{content_type} bytes=%{size_download}\n" \
-  "$BASE/live/$USER/$PASS/$STREAM_ID.ts" 2>&1 | scrub | tee -a "$OUT"
+  2>&1 | scrub | tee -a "$OUT"
 
 hdr "11. Two concurrent streams (max_connections test)"
-curl -s -o /dev/null -m 12 -A "$UA" -w "   A: status=%{http_code} bytes=%{size_download}\n" \
-  "$BASE/live/$USER/$PASS/$STREAM_ID.ts" 2>&1 | scrub >> "$OUT" &
+curlq "$BASE/live/$USER/$PASS/$STREAM_ID.ts" -s -o /dev/null -m 12 -A "$UA" \
+  -w "   A: status=%{http_code} bytes=%{size_download}\n" 2>&1 | scrub >> "$OUT" &
 sleep 2
-curl -s -o /dev/null -m 12 -A "$UA" -w "   B: status=%{http_code} bytes=%{size_download}\n" \
-  "$BASE/live/$USER/$PASS/$STREAM_ID.ts" 2>&1 | scrub >> "$OUT" &
+curlq "$BASE/live/$USER/$PASS/$STREAM_ID.ts" -s -o /dev/null -m 12 -A "$UA" \
+  -w "   B: status=%{http_code} bytes=%{size_download}\n" 2>&1 | scrub >> "$OUT" &
 wait
 tail -2 "$OUT"
 

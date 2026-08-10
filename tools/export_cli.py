@@ -21,8 +21,7 @@ from core.cache import Cache, NullCache  # noqa: E402
 from core.config import KIND_M3U, KIND_XTREAM, ProviderConfig  # noqa: E402
 from core.diagnostics import run_diagnostics  # noqa: E402
 from core.errors import ProviderError  # noqa: E402
-from core.export.exporter import export_channels  # noqa: E402
-from core.http import DEFAULT_USER_AGENT, HttpClient  # noqa: E402
+from core.http import DEFAULT_USER_AGENT, HttpClient, Scrubber  # noqa: E402
 from core.providers.m3u import M3UProvider  # noqa: E402
 from core.providers.xtream import XtreamProvider  # noqa: E402
 
@@ -40,7 +39,8 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="Server URL including port, e.g. http://host:8080")
     parser.add_argument("--user", help="Username")
-    parser.add_argument("--password", help="Password (prompted if omitted)")
+    parser.add_argument("--password-stdin", action="store_true",
+                        help="Read the password from stdin instead of prompting")
     parser.add_argument("--m3u", help="Use a plain M3U URL or path instead of the Xtream API")
     parser.add_argument("--out", default="channels.m3u", help="Output playlist path")
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
@@ -58,7 +58,10 @@ def main() -> int:
     else:
         if not args.base or not args.user:
             parser.error("--base and --user are required unless --m3u is given")
-        password = args.password or getpass.getpass("Password: ")
+        # Deliberately no --password flag: an argument lands in shell history and in
+        # the process table, where any local user can read it with ps.
+        password = (sys.stdin.readline().rstrip("\n") if args.password_stdin
+                    else getpass.getpass("Password: "))
         config = ProviderConfig(
             label="cli", kind=KIND_XTREAM, base_url=args.base, username=args.user,
             password=password, user_agent=args.user_agent, preferred_format=args.format,
@@ -112,12 +115,15 @@ def main() -> int:
     for skipped in result.skipped[:5]:
         print("  skipped: %s" % skipped)
 
-    print("\nFirst entries:")
+    # The playlist URLs embed the account password, so the preview is scrubbed the
+    # same way the logger is. The file on disk necessarily still contains them.
+    print("\nFirst entries (credentials masked):")
+    scrub = Scrubber(config.secrets + ([config.username] if config.username else []))
     with open(result.path, "r", encoding="utf-8") as handle:
         for index, line in enumerate(handle):
             if index >= 12:
                 break
-            print("  " + line.rstrip())
+            print("  " + scrub(line.rstrip()))
     return 0
 
 

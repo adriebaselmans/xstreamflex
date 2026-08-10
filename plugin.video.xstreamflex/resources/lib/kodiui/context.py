@@ -52,6 +52,17 @@ class Context:
             return
         xbmc.log("[%s] %s" % (self.addon_id, message), _LEVELS.get(level, xbmc.LOGINFO))
 
+    def reload(self) -> None:
+        """Re-read state that another process may have changed.
+
+        ``addon.py`` runs in its own interpreter, so a provider added through the UI
+        is invisible to the long-lived service until it re-reads the store. Without
+        this, a freshly added provider gets no scheduled export until Kodi restarts.
+        """
+        self._log_level = self.setting("log_level") or "info"
+        if self._store is not None:
+            self._store.load()
+
     def localise(self, string_id: int) -> str:
         return self.addon.getLocalizedString(string_id)
 

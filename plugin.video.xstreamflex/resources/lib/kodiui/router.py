@@ -17,7 +17,7 @@ from core.diagnostics import run_diagnostics
 from core.errors import NotSupportedError, ProviderError
 from core.export.exporter import export_channels, last_export_time
 from core.export.iptvsimple import apply_plan, build_plan
-from core.models import LIVE, SERIES, VOD, Episode
+from core.models import SERIES, VOD, Episode
 from . import dialogs, listing, play
 from .context import Context
 

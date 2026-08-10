@@ -11,6 +11,7 @@ import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 from .http import DEFAULT_USER_AGENT
 
@@ -75,8 +76,12 @@ class ProviderConfig:
         if self.epg_url:
             return self.epg_url
         if self.kind == KIND_XTREAM and self.base_url and self.username:
-            return "%s/xmltv.php?username=%s&password=%s" % (
-                self.base_url, self.username, self.password,
+            # Quoted, because this string is handed to IPTV Simple as-is and a
+            # password containing & # + or a space would otherwise cut the query
+            # short or arrive corrupted.
+            return "%s/xmltv.php?%s" % (
+                self.base_url,
+                urlencode({"username": self.username, "password": self.password}),
             )
         return ""
 

@@ -208,8 +208,13 @@ def test_provider_add_cancelled_saves_nothing(tmp_path):
     assert context.store.all() == []
 
 
-def test_all_routed_actions_are_callable(tmp_path):
-    """Every registered action must at least dispatch without an unhandled error."""
+def test_all_routed_actions_are_callable(tmp_path, monkeypatch):
+    """Every registered action must run to completion without hitting the guard.
+
+    Asserting only that the directory was closed proves nothing: ``dispatch``
+    catches everything and ``_abort`` closes the directory too, so a crash would
+    look identical. Record what reaches ``_abort`` instead.
+    """
     context = make_context(tmp_path, responses={
         "": load_fixture("account.json"),
         "get_live_categories": [],
@@ -220,9 +225,38 @@ def test_all_routed_actions_are_callable(tmp_path):
         "get_series": [],
         "get_series_info": load_fixture("series_info.json"),
     })
+
+    aborted = {}
+    original = router._abort
+
+    def record(ctx, params, message):
+        aborted[params.get("action", "")] = message
+        return original(ctx, params, message)
+
+    monkeypatch.setattr(router, "_abort", record)
+
     for action in sorted(router._HANDLERS):
         kodistubs.reset()
         kodistubs.Dialog.selects = [-1]
         router.dispatch(context, "?action=%s" % action)
-        # Either the directory was closed or a stream was resolved.
         assert kodistubs.directory_items or kodistubs.resolved, action
+
+    # provider_edit legitimately aborts: the fixture has no such provider id.
+    assert set(aborted) == {"provider_edit"}, aborted
+
+
+def test_the_route_guard_reports_a_crashing_handler(tmp_path):
+    """Proves the guard above actually detects a broken handler."""
+    context = make_context(tmp_path)
+
+    @router.route("_test_boom")
+    def boom(ctx, params):
+        raise RuntimeError("kaboom")
+
+    try:
+        router.dispatch(context, "?action=_test_boom")
+        assert kodistubs.notifications
+        assert ("end", False) in kodistubs.directory_items
+        assert any("kaboom" in message for _, message in kodistubs.log_lines)
+    finally:
+        del router._HANDLERS["_test_boom"]

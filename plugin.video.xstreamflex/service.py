@@ -19,6 +19,9 @@ CHECK_INTERVAL_SECONDS = 300
 
 
 def _run_export(context: Context) -> None:
+    # A provider may have been added through the plugin UI since the last tick, in a
+    # different interpreter.
+    context.reload()
     config = context.store.active()
     if config is None or not config.is_complete:
         return
@@ -31,17 +34,19 @@ def _run_export(context: Context) -> None:
         context.log("debug", "export postponed: playback in progress")
         return
 
-    provider, _ = context.provider(config)
-    if provider is None:
-        return
-
     path = context.playlist_path(config)
+    # Building the provider opens a session and reads settings, so it belongs inside
+    # the guard: an exception escaping here would end the service thread for the
+    # rest of the Kodi session.
     try:
+        provider, _ = context.provider(config)
+        if provider is None:
+            return
         result = export_channels(provider, config, path)
     except ProviderError as exc:
         context.log("warning", "scheduled export failed: %s" % exc.message)
         return
-    except Exception as exc:  # pragma: no cover - the service must never die
+    except Exception as exc:
         context.log("error", "scheduled export crashed: %s" % exc)
         return
     context.log("info", "scheduled export: %s -> %s" % (result.summary(), path))

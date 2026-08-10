@@ -131,6 +131,12 @@ def apply_plan(plan: SetupPlan, addon_data_root: str,
             element = ET.SubElement(root, "setting")
             element.set("id", key)
         element.text = value
+        # Kodi stamps default="true" on any setting still at its schema default, and
+        # on load it calls Reset() on those elements *after* reading the value back.
+        # Leaving the attribute in place means Kodi silently discards everything we
+        # just wrote — which is the common case, because these settings are all at
+        # their defaults until someone touches them by hand.
+        element.attrib.pop("default", None)
 
     backup = target + ".xstreamflex-backup"
     try:

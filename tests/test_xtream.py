@@ -4,7 +4,7 @@ from conftest import FakeClient, load_fixture
 
 from core.config import ProviderConfig
 from core.errors import AuthError, ParseError
-from core.models import LIVE, SERIES, VOD
+from core.models import LIVE
 from core.providers.xtream import XtreamProvider
 
 

@@ -6,17 +6,56 @@ without Kodi.
 """
 from __future__ import annotations
 
+import contextlib
+import errno
 import os
 import time
 from typing import Callable, Optional
 
 from ..config import KIND_XTREAM, ProviderConfig
+from ..errors import ConnectionLimitError
 from ..models import ExportResult
 from .m3u_writer import write_m3u
 
 ProgressFn = Callable[[int, int, str], None]
 
 STATE_FILE = "export-state.json"
+LOCK_FILE = "export.lock"
+
+
+@contextlib.contextmanager
+def export_lock(directory: str, blocking: bool = False):
+    """Prevent two exports from sweeping the provider at the same time.
+
+    A threading lock is not enough: ``addon.py`` and ``service.py`` are separate
+    interpreters, and a user pressing "Rebuild now" while the scheduled export runs
+    would put two full category sweeps against an account that permits one
+    connection. An advisory file lock is the only thing both processes can see.
+    """
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, LOCK_FILE)
+    handle = open(path, "a+")
+    try:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - Windows builds of Kodi
+            yield
+            return
+        flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle.fileno(), flags)
+        except OSError as exc:
+            if exc.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                raise ConnectionLimitError(
+                    "Another channel list rebuild is already running."
+                ) from exc
+            raise
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
 
 
 def export_channels(
@@ -33,16 +72,18 @@ def export_channels(
     else:
         url_for = lambda channel: channel.direct_source  # noqa: E731
 
-    channels = provider.iter_channels(progress=progress)
-    result = write_m3u(
-        out_path,
-        channels,
-        url_for,
-        user_agent=config.user_agent,
-        referer=config.referer,
-        renumber=renumber,
-    )
-    _write_state(os.path.dirname(out_path), config.id, result)
+    directory = os.path.dirname(os.path.abspath(out_path))
+    with export_lock(directory):
+        channels = provider.iter_channels(progress=progress)
+        result = write_m3u(
+            out_path,
+            channels,
+            url_for,
+            user_agent=config.user_agent,
+            referer=config.referer,
+            renumber=renumber,
+        )
+        _write_state(directory, config.id, result)
     return result
 
 

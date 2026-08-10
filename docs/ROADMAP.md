@@ -42,10 +42,19 @@
 - [ ] Dutch translation completed
 - [ ] Cache management UI (size, clear)
 
+## Known gaps
+
+- [ ] **Stream fallback is not wired up.** `StreamRef.alternatives` carries the
+      `ts` → `m3u8` → `direct_source` chain, but nothing consumes it. Automatic failover means
+      probing a second URL, which on a `max_connections: 1` account competes with the stream the
+      user is trying to watch. Needs measuring on a real box before choosing a behaviour.
+- [ ] **`get_short_epg` returned empty** for the one channel that was sampled; see
+      [PROVIDER-FINDINGS.md](PROVIDER-FINDINGS.md#open-question). Nothing depends on it today.
+- [ ] **Windows builds of Kodi get no cross-process export lock** — `export_lock` falls back to a
+      no-op where `fcntl` is unavailable.
+
 ## Later
 
 - [ ] Catch-up / archive playback (`tv_archive` is already carried in the model)
 - [ ] Multiple simultaneous providers merged into one export
 - [ ] Kodi add-on repository packaging
-- [ ] Resolve the empty `get_short_epg` question in
-      [PROVIDER-FINDINGS.md](PROVIDER-FINDINGS.md#open-question)

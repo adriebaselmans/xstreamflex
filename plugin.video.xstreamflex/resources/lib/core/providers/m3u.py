@@ -18,7 +18,32 @@ from ..models import LIVE, Capabilities, Category, Channel, StreamRef
 from .base import BaseProvider
 
 _ATTR_RE = re.compile(r'([A-Za-z0-9_-]+)="([^"]*)"')
-_EXTINF_RE = re.compile(r'^#EXTINF:(?P<duration>-?\d+(?:\.\d+)?)(?P<attrs>[^,]*),(?P<name>.*)$')
+_DURATION_RE = re.compile(r'^-?\d+(?:\.\d+)?')
+
+
+def split_extinf(line: str):
+    """Split ``#EXTINF:<duration> <attrs>,<display name>`` into its three parts.
+
+    Returns ``None`` for a line that is not a usable EXTINF.
+
+    A regex cannot do this: ``tvg-name="BBC, One"`` puts a comma inside an attribute
+    value, and the display name may contain commas of its own. The attribute section
+    ends at the first comma that is *not* inside double quotes; everything after that
+    is the name, commas and all.
+    """
+    body = line[len("#EXTINF:"):]
+    duration = _DURATION_RE.match(body)
+    if duration is None:
+        return None
+    rest = body[duration.end():]
+
+    in_quotes = False
+    for index, char in enumerate(rest):
+        if char == '"':
+            in_quotes = not in_quotes
+        elif char == "," and not in_quotes:
+            return duration.group(0), rest[:index], rest[index + 1:].strip()
+    return None
 
 
 class M3UProvider(BaseProvider):
@@ -106,12 +131,12 @@ def parse_m3u(lines: Iterable[str], default_user_agent: str = "") -> Iterator[Ch
             continue
 
         if line.startswith("#EXTINF:"):
-            match = _EXTINF_RE.match(line)
-            if match is None:
+            parts = split_extinf(line)
+            if parts is None:
                 name, attrs, headers, props, group_override = reset()
                 continue
-            attrs = {k.lower(): v for k, v in _ATTR_RE.findall(match.group("attrs"))}
-            name = match.group("name").strip()
+            _, attr_text, name = parts
+            attrs = {k.lower(): v for k, v in _ATTR_RE.findall(attr_text)}
             headers, props, group_override = {}, {}, ""
             continue
 

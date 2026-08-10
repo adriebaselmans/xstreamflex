@@ -33,9 +33,9 @@ A CI check enforces this; see [DEVELOPMENT.md](DEVELOPMENT.md).
 ┌──────────────────────────────────────────────────────────────────┐
 │ kodiui/                                                          │
 │   router.py     plugin:// URL dispatch                           │
+│   context.py    handle, paths, settings, provider wiring         │
 │   listing.py    ListItem + InfoTagVideo construction             │
 │   play.py       stream resolution, inputstream selection         │
-│   settings.py   Kodi settings  ⇄  core config objects            │
 │   dialogs.py    progress, notifications, diagnostics report      │
 └───────────────────────────┬──────────────────────────────────────┘
                             │  plain dataclasses, no Kodi types
@@ -46,7 +46,7 @@ A CI check enforces this; see [DEVELOPMENT.md](DEVELOPMENT.md).
 │   http.py       session, UA, retries, redirects, serialisation   │
 │   cache.py      sqlite key/value with per-kind TTL               │
 │   providers/    xtream.py, m3u.py  (common Provider interface)   │
-│   export/       m3u_writer.py, iptvsimple.py                     │
+│   export/       m3u_writer.py, exporter.py, iptvsimple.py        │
 │   diagnostics.py                                                 │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -62,8 +62,10 @@ Two entry points share the same `core/` code:
   on startup (if stale) and then on an interval. It is the only component that runs unattended, so
   it is deliberately small: check staleness, call the exporter, log, sleep.
 
-Both take the same lock around export writes, because a user-triggered rebuild and a scheduled one
-can otherwise overlap.
+A user-triggered rebuild and a scheduled one can otherwise overlap, so both take the same advisory
+file lock (`export.lock`, via `fcntl.flock`) around an export. A thread lock would not do: these are
+separate interpreters, and two overlapping runs would put two full category sweeps against an
+account that permits one connection. The second run is refused rather than queued.
 
 ## Concurrency and the connection limit
 
@@ -71,7 +73,7 @@ Provider accounts commonly permit a single concurrent connection, and the refere
 (see [PROVIDER-FINDINGS.md](PROVIDER-FINDINGS.md)). Two mechanisms enforce this:
 
 1. `HttpClient` holds a lock around every request when `serialize=True`, so the add-on never has two
-   API calls in flight.
+   API calls in flight *within* one process, and `export_lock` covers the cross-process case.
 2. The UI never prefetches. Categories load when opened, EPG enrichment loads for the visible page
    only, and playback stops any current player before starting a new one.
 

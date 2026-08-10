@@ -26,16 +26,32 @@ def reset():
     del log_lines[:], directory_items[:], resolved[:], notifications[:], textviewers[:]
 
 
+#: Setters that genuinely exist on xbmc.InfoTagVideo in Kodi 20/21, taken from
+#: xbmc/interfaces/legacy/InfoTagVideo.h. The stub accepts nothing else, so a typo
+#: or an invented method name fails here instead of at runtime inside Kodi.
+INFOTAG_SETTERS = {
+    "setTitle", "setOriginalTitle", "setSortTitle", "setPlot", "setPlotOutline",
+    "setTagLine", "setMediaType", "setYear", "setRating", "setRatings",
+    "setUserRating", "setPlaycount", "setDuration", "setGenres", "setDirectors",
+    "setWriters", "setStudios", "setCountries", "setCast", "setTvShowTitle",
+    "setSeason", "setEpisode", "setEpisodeGuide", "setPremiered", "setFirstAired",
+    "setDateAdded", "setLastPlayed", "setMpaa", "setImdbNumber", "setUniqueIDs",
+    "setTrailer", "setPath", "setFilenameAndPath", "setResumePoint", "setTags",
+    "setSetId", "setSet", "setSetOverview", "setTop250", "setTrackNumber",
+}
+
+
 class _InfoTag:
     def __init__(self):
         self.values = {}
 
     def __getattr__(self, name):
-        if not name.startswith("set"):
-            raise AttributeError(name)
+        if name not in INFOTAG_SETTERS:
+            raise AttributeError(
+                "xbmc.InfoTagVideo has no %r in Kodi 20/21" % name)
         key = name[3:].lower()
 
-        def setter(value):
+        def setter(value, *args, **kwargs):
             self.values[key] = value
         return setter
 
@@ -132,8 +148,13 @@ class Monitor:
 class Addon:
     settings = {}
     info = {}
+    #: Add-on ids that this stub pretends are installed. Kodi raises for anything
+    #: else, and code under test relies on that to detect optional inputstreams.
+    installed = {"plugin.video.xstreamflex"}
 
     def __init__(self, addon_id="plugin.video.xstreamflex"):
+        if addon_id not in Addon.installed:
+            raise RuntimeError("Add-on %s is not installed" % addon_id)
         self._id = addon_id
 
     def getAddonInfo(self, key):
