@@ -66,4 +66,5 @@
 
 - [ ] Catch-up / archive playback (`tv_archive` is already carried in the model)
 - [ ] Multiple simultaneous providers merged into one export
-- [ ] Kodi add-on repository packaging
+- [x] Installable ZIP via `tools/package.py`
+- [ ] A hosted Kodi add-on repository, so updates arrive automatically instead of by hand

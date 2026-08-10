@@ -74,6 +74,24 @@ Independent of the Python code — pure `curl`. Useful as a second opinion when 
 provider disagree. Writes a log with the username and password masked, so it is safe to attach to a
 bug report. Findings from the reference provider are in [PROVIDER-FINDINGS.md](PROVIDER-FINDINGS.md).
 
+## Build an installable package
+
+```bash
+python3 tools/package.py            # -> dist/plugin.video.xstreamflex-<version>.zip
+python3 tools/package.py --out /tmp
+```
+
+Kodi requires the archive to contain exactly one top-level directory named after the add-on id, with
+`addon.xml` directly inside it, and it reports a violation only as a generic "invalid structure"
+error. `tools/package.py` therefore verifies its own output before it finishes: top-level shape,
+presence of the entry points and resources, no bytecode, and a version that matches `addon.xml`.
+`tests/test_packaging.py` asserts the same properties, and additionally compiles every Python file
+straight out of the archive.
+
+Bump `version` in `plugin.video.xstreamflex/addon.xml` before building a release; Kodi refuses to
+install a ZIP that is not newer than what is already installed. Installation steps for the finished
+ZIP are in the [README](../README.md#install).
+
 ## Run inside Kodi
 
 Install Kodi 21:

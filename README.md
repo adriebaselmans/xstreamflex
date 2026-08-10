@@ -54,16 +54,57 @@ all for channels — it reads a file on disk that the add-on refreshes on a sche
 
 ## Install
 
-Not yet published to a repository. For now, install from the source tree:
+Not published to a Kodi repository, so installation is from a ZIP you build yourself.
+
+### 1. Build the package
 
 ```bash
-git clone <this-repo> ~/src/xstreamflex
+git clone https://github.com/adriebaselmans/xstreamflex ~/src/xstreamflex
+cd ~/src/xstreamflex
+python3 tools/package.py
+# -> dist/plugin.video.xstreamflex-0.1.0.zip
+```
+
+The script produces exactly the shape Kodi requires — one top-level folder named after the add-on
+id, no bytecode — and refuses to write an archive that would fail to install.
+
+### 2. Get the ZIP onto the Kodi machine
+
+Whatever is convenient: a USB stick, `scp`, a network share, or Kodi's own file manager pointed at
+an HTTP URL. Kodi can install from any path it can read.
+
+### 3. Install it in Kodi
+
+Kodi blocks third-party add-ons by default. Once, under
+*Settings → System → Add-ons*, enable **Unknown sources** and accept the warning.
+
+Then *Settings → Add-ons → **Install from zip file*** → browse to the ZIP → confirm.
+
+Kodi installs the dependency (`script.module.requests`) from its own repository automatically. On
+success you get a notification and the add-on appears under *Add-ons → Video add-ons*.
+
+### Upgrading
+
+Bump `version` in `plugin.video.xstreamflex/addon.xml`, rebuild, and install the new ZIP the same
+way. Kodi replaces the add-on and keeps your settings and providers, which live in the profile
+directory rather than in the add-on folder. Kodi will not install a ZIP whose version is not higher
+than the installed one.
+
+### Developing instead of installing
+
+If you are changing the code, symlink it rather than packaging on every edit:
+
+```bash
 ln -s ~/src/xstreamflex/plugin.video.xstreamflex ~/.kodi/addons/plugin.video.xstreamflex
 ```
 
-Restart Kodi, then enable the add-on under *Add-ons → My add-ons → Video add-ons*.
+Restart Kodi and enable it under *Add-ons → My add-ons → Video add-ons*. See
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-You also need **PVR IPTV Simple Client** installed and enabled for the Live TV part.
+### Also needed
+
+**PVR IPTV Simple Client** must be installed and enabled for the Live TV part. It ships with Kodi;
+enable it under *Add-ons → My add-ons → PVR clients*. Movies and series work without it.
 
 ## Configure
 
