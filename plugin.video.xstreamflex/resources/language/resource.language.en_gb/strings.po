@@ -1,0 +1,74 @@
+# XstreamFlex
+msgid ""
+msgstr ""
+"Project-Id-Version: plugin.video.xstreamflex\n"
+"Report-Msgid-Bugs-To: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: en_GB\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgctxt "#30100"
+msgid "Channel list"
+msgstr ""
+
+msgctxt "#30101"
+msgid "Rebuild the channel list automatically"
+msgstr ""
+
+msgctxt "#30102"
+msgid "Rebuild at Kodi startup when out of date"
+msgstr ""
+
+msgctxt "#30103"
+msgid "Rebuild every (hours)"
+msgstr ""
+
+msgctxt "#30200"
+msgid "Playback"
+msgstr ""
+
+msgctxt "#30201"
+msgid "Preferred stream format"
+msgstr ""
+
+msgctxt "#30202"
+msgid "MPEG-TS (.ts)"
+msgstr ""
+
+msgctxt "#30203"
+msgid "HLS (.m3u8)"
+msgstr ""
+
+msgctxt "#30300"
+msgid "Network"
+msgstr ""
+
+msgctxt "#30301"
+msgid "Request timeout (seconds)"
+msgstr ""
+
+msgctxt "#30302"
+msgid "One request at a time (respect connection limit)"
+msgstr ""
+
+msgctxt "#30400"
+msgid "Advanced"
+msgstr ""
+
+msgctxt "#30401"
+msgid "Cache lifetime multiplier (0 disables caching)"
+msgstr ""
+
+msgctxt "#30402"
+msgid "Logging"
+msgstr ""
+
+msgctxt "#30403"
+msgid "Normal"
+msgstr ""
+
+msgctxt "#30404"
+msgid "Debug (logs every request)"
+msgstr ""

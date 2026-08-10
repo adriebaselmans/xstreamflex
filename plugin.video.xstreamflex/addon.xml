@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="plugin.video.xstreamflex"
+       name="XstreamFlex"
+       version="0.1.0"
+       provider-name="adriebaselmans">
+  <requires>
+    <import addon="xbmc.python" version="3.0.1"/>
+    <import addon="script.module.requests" version="2.27.1"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="addon.py">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.service" library="service.py"/>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en_GB">Flexible IPTV for Xtream Codes and M3U sources</summary>
+    <summary lang="nl_NL">Flexibele IPTV voor Xtream Codes en M3U-bronnen</summary>
+    <description lang="en_GB">Reads your channel list from the Xtream API instead of a bulk get.php download, so it keeps working on providers where IPTV Simple fails. Writes a clean local M3U for IPTV Simple to read, so you keep Kodi's native EPG grid, and browses movies and series in the add-on itself. Includes diagnostics that report exactly what your provider accepts and refuses.</description>
+    <description lang="nl_NL">Haalt je kanaallijst uit de Xtream API in plaats van uit een grote get.php-download, en blijft daardoor werken bij providers waar IPTV Simple faalt. Schrijft een schone lokale M3U die IPTV Simple inleest, zodat je Kodi's eigen programmagids houdt, en bladert films en series in de add-on zelf. Bevat diagnostiek die precies laat zien wat je provider accepteert en weigert.</description>
+    <platform>all</platform>
+    <license>GPL-2.0-or-later</license>
+    <language></language>
+    <assets>
+      <icon>icon.png</icon>
+      <fanart>fanart.jpg</fanart>
+    </assets>
+    <news>0.1.0 - First release: Xtream API browsing, M3U export for IPTV Simple, VOD and series, provider diagnostics.</news>
+  </extension>
+</addon>

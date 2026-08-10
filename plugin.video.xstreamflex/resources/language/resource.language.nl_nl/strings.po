@@ -1,0 +1,74 @@
+# XstreamFlex
+msgid ""
+msgstr ""
+"Project-Id-Version: plugin.video.xstreamflex\n"
+"Report-Msgid-Bugs-To: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: nl_NL\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgctxt "#30100"
+msgid "Channel list"
+msgstr "Kanaallijst"
+
+msgctxt "#30101"
+msgid "Rebuild the channel list automatically"
+msgstr "Kanaallijst automatisch vernieuwen"
+
+msgctxt "#30102"
+msgid "Rebuild at Kodi startup when out of date"
+msgstr "Vernieuwen bij opstarten van Kodi als de lijst verouderd is"
+
+msgctxt "#30103"
+msgid "Rebuild every (hours)"
+msgstr "Vernieuwen elke (uren)"
+
+msgctxt "#30200"
+msgid "Playback"
+msgstr "Afspelen"
+
+msgctxt "#30201"
+msgid "Preferred stream format"
+msgstr "Voorkeursformaat"
+
+msgctxt "#30202"
+msgid "MPEG-TS (.ts)"
+msgstr "MPEG-TS (.ts)"
+
+msgctxt "#30203"
+msgid "HLS (.m3u8)"
+msgstr "HLS (.m3u8)"
+
+msgctxt "#30300"
+msgid "Network"
+msgstr "Netwerk"
+
+msgctxt "#30301"
+msgid "Request timeout (seconds)"
+msgstr "Time-out per verzoek (seconden)"
+
+msgctxt "#30302"
+msgid "One request at a time (respect connection limit)"
+msgstr "Eén verzoek tegelijk (verbindingslimiet respecteren)"
+
+msgctxt "#30400"
+msgid "Advanced"
+msgstr "Geavanceerd"
+
+msgctxt "#30401"
+msgid "Cache lifetime multiplier (0 disables caching)"
+msgstr "Cache-levensduur vermenigvuldiger (0 schakelt cache uit)"
+
+msgctxt "#30402"
+msgid "Logging"
+msgstr "Logboek"
+
+msgctxt "#30403"
+msgid "Normal"
+msgstr "Normaal"
+
+msgctxt "#30404"
+msgid "Debug (logs every request)"
+msgstr "Debug (logt elk verzoek)"

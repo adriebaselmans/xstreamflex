@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Diagnostic logs may contain provider hostnames; keep them out by default.
+iptv-diag-*.log
+docs/iptv-diag-*.log
+channels*.m3u

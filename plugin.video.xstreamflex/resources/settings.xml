@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<settings version="1">
+  <section id="plugin.video.xstreamflex">
+
+    <category id="export" label="30100">
+      <group id="1">
+        <setting id="export_enabled" type="boolean" label="30101">
+          <level>0</level>
+          <default>true</default>
+          <control type="toggle"/>
+        </setting>
+        <setting id="export_on_startup" type="boolean" label="30102">
+          <level>0</level>
+          <default>true</default>
+          <dependencies>
+            <dependency type="enable" setting="export_enabled">true</dependency>
+          </dependencies>
+          <control type="toggle"/>
+        </setting>
+        <setting id="export_interval_hours" type="integer" label="30103">
+          <level>0</level>
+          <default>6</default>
+          <constraints>
+            <minimum>1</minimum>
+            <step>1</step>
+            <maximum>48</maximum>
+          </constraints>
+          <dependencies>
+            <dependency type="enable" setting="export_enabled">true</dependency>
+          </dependencies>
+          <control type="slider" format="integer">
+            <popup>false</popup>
+          </control>
+        </setting>
+      </group>
+    </category>
+
+    <category id="playback" label="30200">
+      <group id="1">
+        <setting id="preferred_format" type="string" label="30201">
+          <level>0</level>
+          <default>ts</default>
+          <constraints>
+            <options>
+              <option label="30202">ts</option>
+              <option label="30203">m3u8</option>
+            </options>
+          </constraints>
+          <control type="list" format="string"/>
+        </setting>
+      </group>
+    </category>
+
+    <category id="network" label="30300">
+      <group id="1">
+        <setting id="request_timeout" type="integer" label="30301">
+          <level>0</level>
+          <default>30</default>
+          <constraints>
+            <minimum>5</minimum>
+            <step>5</step>
+            <maximum>120</maximum>
+          </constraints>
+          <control type="slider" format="integer">
+            <popup>false</popup>
+          </control>
+        </setting>
+        <setting id="serialize_requests" type="boolean" label="30302">
+          <level>0</level>
+          <default>true</default>
+          <control type="toggle"/>
+        </setting>
+      </group>
+    </category>
+
+    <category id="advanced" label="30400">
+      <group id="1">
+        <setting id="cache_ttl_multiplier" type="number" label="30401">
+          <level>2</level>
+          <default>1.0</default>
+          <constraints>
+            <minimum>0</minimum>
+            <step>0.5</step>
+            <maximum>5</maximum>
+          </constraints>
+          <control type="slider" format="number">
+            <popup>false</popup>
+          </control>
+        </setting>
+        <setting id="log_level" type="string" label="30402">
+          <level>2</level>
+          <default>info</default>
+          <constraints>
+            <options>
+              <option label="30403">info</option>
+              <option label="30404">debug</option>
+            </options>
+          </constraints>
+          <control type="list" format="string"/>
+        </setting>
+      </group>
+    </category>
+
+  </section>
+</settings>

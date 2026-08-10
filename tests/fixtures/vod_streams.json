@@ -1,0 +1,6 @@
+[
+  {"num": 1, "name": "Some Movie", "stream_type": "movie", "stream_id": 555,
+   "stream_icon": "http://img/poster.jpg", "rating": "7.4", "rating_5based": 3.7,
+   "added": "1700000000", "category_id": "9", "container_extension": "mkv",
+   "custom_sid": "", "direct_source": "", "plot": "A plot.", "year": "2019"}
+]

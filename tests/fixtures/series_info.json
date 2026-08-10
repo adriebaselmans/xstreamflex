@@ -1,0 +1,18 @@
+{
+  "seasons": [],
+  "info": {"name": "Some Show", "cover": "http://img/cover.jpg", "plot": "About things.",
+           "genre": "Drama", "releaseDate": "2018-04-01", "rating": "8.1"},
+  "episodes": {
+    "1": [
+      {"id": "9001", "episode_num": 1, "title": "Pilot", "container_extension": "mkv",
+       "info": {"duration_secs": 2700, "duration": "00:45:00", "plot": "It begins.",
+                "movie_image": "http://img/e1.jpg", "rating": 8}, "season": 1},
+      {"id": "9002", "episode_num": "2", "title": "Second", "container_extension": "mp4",
+       "info": {"duration": "00:42:10", "plot": "It continues."}, "season": "1"}
+    ],
+    "2": [
+      {"id": "9003", "episode_num": 1, "title": "Return", "container_extension": "mkv",
+       "info": {"duration_secs": "2640"}, "season": 2}
+    ]
+  }
+}
