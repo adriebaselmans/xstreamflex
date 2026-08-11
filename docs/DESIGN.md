@@ -391,14 +391,45 @@ even invoked. No setting found so far changes this.
 `.strm` files sidestep plugin-source scanning entirely. A folder of them is, to Kodi's library
 scanner, indistinguishable from a folder of real video files some other tool put there — the
 best-trodden path in the whole Kodi ecosystem (every "add to library" video add-on uses it). Each file
-is one line: the `plugin://` URL to open. `sync_library` writes one per movie
-(`<source>/<title> (<id>).strm`) and one per episode, nested under a source folder and then a show
-folder (`<source>/<show>/<show> - S01E02 - <title> (<id>).strm`) — season/episode numbers in the
+is one line: the `plugin://` URL to open. `sync_library` writes one per movie, nested under a source
+folder (`<source>/<title> (<id>).strm`), and one per episode, nested under a show folder with **no**
+source folder above it (`<show>/S01E02 - <title> (<id>).strm`) — season/episode numbers in the
 filename are what Kodi's scanner parses for TV shows, no NFO required. `<source>` is the provider's
 own category name (e.g. `NL | Netflix`), because the provider organizes both movies and series that
 way and a title listed under two sources (Netflix *and* Videoland) should show up under both, not get
 silently collapsed to one — `collect_movies`/`collect_shows_with_episodes` return `(source, item)`
 pairs for exactly this reason, not bare lists.
+
+Movies and episodes deliberately use **different** depths for that same source information.
+`movie_strm_path` puts it in the path (`<source>/<title>...`) because Kodi's *movie* scanner walks
+arbitrarily deep looking for playable files and this was confirmed working against a real account.
+`episode_strm_path` does not, and accepts a `source` argument only for API symmetry with
+`collect_shows_with_episodes` — Kodi's *TV* scanner expects exactly one level of nesting
+(`<TV root>/<Show>/<episode files>`) and, confirmed against the same account, does not descend past an
+unrecognized intermediate folder to find the real show folders underneath it: with a source folder in
+between, Kodi logged `No information found for item '...\<source folder>\'` for the source folder
+itself, treating it as a failed show-match, and never looked inside it — leaving virtually the entire
+series catalogue invisible in Kodi despite thousands of correctly-written `.strm` files sitting right
+there on disk.
+
+Losing the source folder for episodes lost the one thing it was for: being able to browse/filter
+"just this show's source" (Netflix vs. Videoland) inside Kodi, which movies keep via their folder.
+`movie_nfo_content`/`show_nfo_content` get it back a different way — a companion NFO next to each
+`.strm` (`movie_nfo_path`: same basename, `.nfo` instead of `.strm`; `show_nfo_path`: the fixed
+Kodi-recognized filename `tvshow.nfo`, once per show folder, describing the show rather than any one
+episode) with the source as a `<tag>`. Kodi's library view can filter/browse by Tag the same way it
+does Genre, for both movies and TV shows, regardless of folder structure — which is what makes this
+work for series despite the folder-per-source approach being ruled out for them specifically.
+
+The NFO is fully self-contained (title/plot/year/genre/rating/poster straight from the provider's own
+`Movie`/`Series` data) rather than a stub that only carries the tag and otherwise expects Kodi to
+scrape online — deliberately, because a real account showed many otherwise-fine titles (e.g. "Aquaman
+and the Lost Kingdom", decorated with a resolution/country/id suffix purely for filename-uniqueness
+reasons) failing to match TMDB and logging `No information found ... it won't be added to the
+library`: an item could sync perfectly and still never appear in Kodi. A self-contained NFO removes
+that failure mode entirely — no match to find, nothing to fail. Poster/cover URLs get the same
+`|Header=value` suffix (`core.http.header_suffix`) as every other request to this provider, since Kodi
+fetches NFO-referenced art itself, outside any hand-off this add-on otherwise controls.
 
 `safe_filename`'s `max_length`, and `_budget_for`'s per-path length budget computed from the actual
 `root` passed in, exist because a real provider was observed returning an episode `title` that is

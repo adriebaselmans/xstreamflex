@@ -7,14 +7,18 @@ from core.library_sync import (
     is_sync_stale,
     last_sync_time,
     matches_country,
+    movie_nfo_content,
+    movie_nfo_path,
     movie_strm_content,
     movie_strm_path,
     safe_filename,
+    show_nfo_content,
+    show_nfo_path,
     sync_episodes,
     sync_movies,
     write_sync_state,
 )
-from core.models import Episode, Movie
+from core.models import Episode, Movie, Series
 
 
 def movie(**kwargs):
@@ -28,6 +32,12 @@ def episode(**kwargs):
                 container_extension="mkv")
     base.update(kwargs)
     return Episode(**base)
+
+
+def series(**kwargs):
+    base = dict(id="1", name="Show One")
+    base.update(kwargs)
+    return Series(**base)
 
 
 def test_safe_filename_strips_illegal_characters():
@@ -58,14 +68,19 @@ def test_episode_strm_content_points_at_play_episode():
     )
 
 
-def test_episode_strm_path_nests_under_source_then_show(tmp_path):
-    """The show name is deliberately not repeated in the filename - Kodi's TV
-    scanner already gets it from the parent folder, and repeating it was the
-    main contributor to real filenames exceeding Windows' MAX_PATH."""
+def test_episode_strm_path_nests_directly_under_the_show_no_source_folder(tmp_path):
+    """Two things deliberately not in the filename/path, both confirmed against
+    a real account: the show name is not repeated in the filename (Kodi's TV
+    scanner already gets it from the parent folder, and repeating it was a
+    main contributor to filenames exceeding Windows' MAX_PATH), and there is
+    no source folder between the library root and the show (unlike movies) -
+    Kodi's TV scanner expects exactly one level of nesting and does not
+    descend past an unrecognized folder to find the real show folders under
+    it, which left virtually the entire series catalogue invisible when a
+    source folder was tried."""
     root = str(tmp_path)
     path = episode_strm_path(root, "NL | Netflix", "Turner & Hooch", episode())
-    assert path == os.path.join(root, "NL Netflix", "Turner & Hooch",
-                                "S01E02 - The Pilot (10).strm")
+    assert path == os.path.join(root, "Turner & Hooch", "S01E02 - The Pilot (10).strm")
 
 
 def test_episode_strm_path_strips_illegal_characters_from_the_show_name(tmp_path):
@@ -78,6 +93,65 @@ def test_movie_strm_path_nests_under_source(tmp_path):
     root = str(tmp_path)
     path = movie_strm_path(root, "NL | Videoland", movie())
     assert path == os.path.join(root, "NL Videoland", "Some Movie (NL) (1).strm")
+
+
+# -- NFO generation: tags for browsing by source, self-contained metadata ----
+
+def test_movie_nfo_path_matches_the_strm_basename(tmp_path):
+    root = str(tmp_path)
+    strm = movie_strm_path(root, "Src", movie())
+    nfo = movie_nfo_path(root, "Src", movie())
+    assert nfo == strm[: -len(".strm")] + ".nfo"
+
+
+def test_movie_nfo_content_has_title_and_source_tag():
+    content = movie_nfo_content(movie(), "NL | Videoland")
+    assert "<title>Some Movie (NL)</title>" in content
+    assert "<tag>NL | Videoland</tag>" in content
+    assert content.startswith('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+
+
+def test_movie_nfo_content_includes_optional_fields_when_present():
+    m = movie(plot="A plot.", year=2024, genre="Action", rating=7.5, icon="http://img/p.jpg")
+    content = movie_nfo_content(m, "Src", headers={"User-Agent": "UA/1.0"})
+    assert "<plot>A plot.</plot>" in content
+    assert "<year>2024</year>" in content
+    assert "<genre>Action</genre>" in content
+    assert "<rating>7.5</rating>" in content
+    assert "http://img/p.jpg|User-Agent=UA%2F1.0" in content
+
+
+def test_movie_nfo_content_omits_optional_fields_when_absent():
+    content = movie_nfo_content(movie(), "Src")
+    assert "<plot>" not in content
+    assert "<year>" not in content
+    assert "<thumb" not in content
+
+
+def test_movie_nfo_content_escapes_xml_special_characters():
+    content = movie_nfo_content(movie(name="Tom & Jerry <Movie>"), "Src")
+    assert "Tom &amp; Jerry &lt;Movie&gt;" in content
+    assert "<Movie>" not in content
+
+
+def test_show_nfo_path_is_tvshow_nfo_in_the_show_folder(tmp_path):
+    root = str(tmp_path)
+    assert show_nfo_path(root, "Turner & Hooch") == os.path.join(
+        root, "Turner & Hooch", "tvshow.nfo")
+
+
+def test_show_nfo_content_has_title_and_source_tag():
+    content = show_nfo_content(series(name="Show One"), "NL | Netflix")
+    assert "<title>Show One</title>" in content
+    assert "<tag>NL | Netflix</tag>" in content
+    assert content.startswith('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+    assert "<tvshow>" in content and "</tvshow>" in content
+
+
+def test_show_nfo_content_includes_cover_as_poster_thumb():
+    content = show_nfo_content(series(cover="http://img/cover.jpg"), "Src",
+                               headers={"User-Agent": "UA"})
+    assert '<thumb aspect="poster">http://img/cover.jpg|User-Agent=UA</thumb>' in content
 
 
 # -- the actual bug: a provider-formatted title long enough to break Windows --
@@ -127,7 +201,6 @@ def test_sync_movies_skips_a_failing_item_and_keeps_going(tmp_path, monkeypatch)
     import core.library_sync as library_sync
 
     real_write = library_sync._write_if_changed
-    calls = []
 
     def flaky_write(path, content):
         if "bad" in path:
@@ -143,9 +216,10 @@ def test_sync_movies_skips_a_failing_item_and_keeps_going(tmp_path, monkeypatch)
         "plugin://plugin.video.xstreamflex/",
         on_error=lambda path, exc: errors.append((path, exc)),
     )
-    assert written == 1
-    assert len(errors) == 1
-    assert "bad" in errors[0][0]
+    # "bad" movie: both its .strm and .nfo fail (both paths contain "bad").
+    assert written == 2  # good movie's .strm + .nfo
+    assert len(errors) == 2
+    assert all("bad" in path for path, _exc in errors)
 
 
 def test_sync_episodes_skips_a_failing_item_and_keeps_going(tmp_path, monkeypatch):
@@ -162,13 +236,15 @@ def test_sync_episodes_skips_a_failing_item_and_keeps_going(tmp_path, monkeypatc
     monkeypatch.setattr(library_sync, "_write_if_changed", flaky_write)
 
     errors = []
-    shows = [("Src", "bad show", [episode(id="1")]), ("Src", "good show", [episode(id="2")])]
+    shows = [("Src", series(name="bad show"), [episode(id="1")]),
+             ("Src", series(name="good show"), [episode(id="2")])]
     written, removed = sync_episodes(
         root, shows, "plugin://plugin.video.xstreamflex/",
         on_error=lambda path, exc: errors.append((path, exc)),
     )
-    assert written == 1
-    assert len(errors) == 1
+    # "bad show": its tvshow.nfo and its one episode both fail.
+    assert written == 2  # good show's tvshow.nfo + its one episode
+    assert len(errors) == 2
 
 
 def test_sync_movies_on_error_defaults_to_a_silent_noop(tmp_path, monkeypatch):
@@ -184,15 +260,18 @@ def test_sync_movies_on_error_defaults_to_a_silent_noop(tmp_path, monkeypatch):
     assert written == 0
 
 
-# -- basic sync behaviour, now source-aware -----------------------------------
+# -- basic sync behaviour, now source-aware and NFO-aware ---------------------
 
-def test_sync_movies_writes_one_file_per_movie(tmp_path):
+def test_sync_movies_writes_strm_and_nfo_per_movie(tmp_path):
     root = str(tmp_path)
     written, removed = sync_movies(
         root, [("Src", movie(id="1")), ("Src", movie(id="2", name="Other"))],
         "plugin://plugin.video.xstreamflex/")
-    assert written == 2
+    assert written == 4  # 2 movies x (.strm + .nfo)
     assert removed == 0
+    strm_files = [f for f in os.listdir(os.path.join(root, "Src")) if f.endswith(".strm")]
+    nfo_files = [f for f in os.listdir(os.path.join(root, "Src")) if f.endswith(".nfo")]
+    assert len(strm_files) == 2 and len(nfo_files) == 2
 
 
 def test_sync_movies_is_idempotent(tmp_path):
@@ -213,7 +292,7 @@ def test_sync_movies_removes_titles_no_longer_present(tmp_path):
     written, removed = sync_movies(root, [("Src", movie(id="1"))],
                                     "plugin://plugin.video.xstreamflex/")
     assert written == 0
-    assert removed == 1
+    assert removed == 2  # dropped movie's .strm and .nfo
 
 
 def test_sync_movies_rewrites_a_changed_title(tmp_path):
@@ -233,20 +312,21 @@ def test_sync_movies_puts_the_same_title_under_each_source_it_appears_in(tmp_pat
     written, removed = sync_movies(
         root, [("NL | Netflix", movie(id="1")), ("NL | Videoland", movie(id="1"))],
         "plugin://plugin.video.xstreamflex/")
-    assert written == 2
+    assert written == 4  # 2 sources x (.strm + .nfo)
     assert os.path.isdir(os.path.join(root, "NL Netflix"))
     assert os.path.isdir(os.path.join(root, "NL Videoland"))
 
 
-def test_sync_episodes_nests_by_source_then_show_and_is_idempotent(tmp_path):
+def test_sync_episodes_nests_directly_by_show_no_source_folder_and_is_idempotent(tmp_path):
     root = str(tmp_path)
-    shows = [("NL | Netflix", "Show One", [episode(id="10", season=1, episode=1),
-                                           episode(id="11", season=1, episode=2)])]
+    shows = [("NL | Netflix", series(name="Show One"),
+             [episode(id="10", season=1, episode=1), episode(id="11", season=1, episode=2)])]
 
     written, removed = sync_episodes(root, shows, "plugin://plugin.video.xstreamflex/")
-    assert written == 2
+    assert written == 3  # tvshow.nfo + 2 episodes
     assert removed == 0
-    assert os.path.isdir(os.path.join(root, "NL Netflix", "Show One"))
+    assert os.path.isdir(os.path.join(root, "Show One"))
+    assert os.path.isfile(os.path.join(root, "Show One", "tvshow.nfo"))
 
     written, removed = sync_episodes(root, shows, "plugin://plugin.video.xstreamflex/")
     assert written == 0
@@ -255,11 +335,12 @@ def test_sync_episodes_nests_by_source_then_show_and_is_idempotent(tmp_path):
 
 def test_sync_episodes_removes_episodes_dropped_from_the_provider(tmp_path):
     root = str(tmp_path)
-    shows = [("Src", "Show One", [episode(id="10"), episode(id="11")])]
+    shows = [("Src", series(name="Show One"), [episode(id="10"), episode(id="11")])]
     sync_episodes(root, shows, "plugin://plugin.video.xstreamflex/")
 
     written, removed = sync_episodes(
-        root, [("Src", "Show One", [episode(id="10")])], "plugin://plugin.video.xstreamflex/")
+        root, [("Src", series(name="Show One"), [episode(id="10")])],
+        "plugin://plugin.video.xstreamflex/")
     assert removed == 1
 
 

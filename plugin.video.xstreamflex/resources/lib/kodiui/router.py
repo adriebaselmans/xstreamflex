@@ -349,6 +349,7 @@ def sync_library(context: Context, params) -> None:
     this size, and .strm files sidestep that scanning entirely."""
     country = params.get("country", "NL")
     provider, config = _require_provider(context)
+    headers = _image_headers(config)
 
     movies_root = os.path.join(context.library_dir, "movies")
     series_root = os.path.join(context.library_dir, "series")
@@ -374,11 +375,11 @@ def sync_library(context: Context, params) -> None:
     try:
         all_movies = collect_movies(provider, country, progress=movie_progress)
         movies_written, movies_removed = sync_movies(
-            movies_root, all_movies, context.base_url, on_error=on_error)
+            movies_root, all_movies, context.base_url, on_error=on_error, headers=headers)
 
         shows = collect_shows_with_episodes(provider, country, progress=series_progress)
         series_written, series_removed = sync_episodes(
-            series_root, shows, context.base_url, on_error=on_error)
+            series_root, shows, context.base_url, on_error=on_error, headers=headers)
     finally:
         progress.close()
 

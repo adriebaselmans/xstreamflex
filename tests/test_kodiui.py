@@ -117,7 +117,7 @@ def test_sync_library_writes_episodes_under_a_show_folder(tmp_path):
     router.dispatch(context, "?action=sync_library&country=NL")
 
     series_dir = os.path.join(context.library_dir, "series")
-    assert os.path.isdir(os.path.join(series_dir, "NL Series"))
+    assert os.path.isdir(os.path.join(series_dir, "Some Show"))
     episode_files = [os.path.join(dirpath, name)
                      for dirpath, _dirs, names in os.walk(series_dir)
                      for name in names if name.endswith(".strm")]

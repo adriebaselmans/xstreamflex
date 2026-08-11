@@ -46,6 +46,13 @@ def _run_library_sync(context: Context) -> None:
     def on_error(path, exc):
         context.log("warning", "library sync: skipped %s (%s)" % (path, exc))
 
+    # Poster/thumb URLs need the same header this provider requires for every
+    # other request (see PROVIDER-FINDINGS.md); Kodi fetches NFO-referenced art
+    # itself, outside any hand-off this add-on controls otherwise.
+    headers = {"User-Agent": config.user_agent} if config.user_agent else {}
+    if config.referer:
+        headers["Referer"] = config.referer
+
     try:
         provider, _ = context.provider(config)
         if provider is None:
@@ -53,10 +60,11 @@ def _run_library_sync(context: Context) -> None:
         movies_root = os.path.join(context.library_dir, "movies")
         series_root = os.path.join(context.library_dir, "series")
         movies_written, movies_removed = sync_movies(
-            movies_root, collect_movies(provider, country), context.base_url, on_error=on_error)
+            movies_root, collect_movies(provider, country), context.base_url,
+            on_error=on_error, headers=headers)
         shows = collect_shows_with_episodes(provider, country)
         series_written, series_removed = sync_episodes(
-            series_root, shows, context.base_url, on_error=on_error)
+            series_root, shows, context.base_url, on_error=on_error, headers=headers)
     except ProviderError as exc:
         context.log("warning", "scheduled library sync failed: %s" % exc.message)
         return

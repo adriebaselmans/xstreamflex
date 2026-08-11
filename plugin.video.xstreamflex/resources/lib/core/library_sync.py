@@ -21,8 +21,10 @@ import re
 import time
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
+from xml.sax.saxutils import escape as _xml_escape
 
-from .models import SERIES, VOD, Episode, Movie
+from .http import header_suffix
+from .models import SERIES, VOD, Episode, Movie, Series
 
 _UNSAFE = re.compile(r'[\\/:*?"<>|]')
 
@@ -65,10 +67,12 @@ def collect_movies(
 
 def collect_shows_with_episodes(
     provider, country: str, progress: Optional[ProgressFn] = None
-) -> List[Tuple[str, str, List[Episode]]]:
+) -> List[Tuple[str, Series, List[Episode]]]:
     """One provider call per show (no bulk "all episodes" endpoint exists) -
     the slow part of a library sync, hence its own progress callback. Returns
-    ``(source category name, show name, episodes)`` triples."""
+    ``(source category name, show, episodes)`` triples - the full ``Series``
+    object, not just its name, so ``tvshow.nfo`` generation has plot/cover/
+    genre/rating/year to work with."""
     categories = [c for c in provider.categories(SERIES) if matches_country(c.name, country)]
     shows = []
     for category in categories:
@@ -79,7 +83,7 @@ def collect_shows_with_episodes(
         if progress:
             progress(index, len(shows), show.name)
         _, episodes = provider.series_info(show.id)
-        result.append((source, show.name, episodes))
+        result.append((source, show, episodes))
     return result
 
 
@@ -121,6 +125,12 @@ def _budget_for(root: str, *fixed_parts: str, separators: int) -> int:
     return max(_MIN_COMPONENT, _MAX_PATH - used)
 
 
+def _show_dir_name(show_name: str) -> str:
+    """Shared between episode_strm_path and show_nfo_path so an episode and its
+    show's tvshow.nfo always agree on which folder they live in."""
+    return safe_filename(show_name, max_length=60)
+
+
 def movie_strm_path(root: str, source: str, movie: Movie) -> str:
     source_dir = safe_filename(source, "Other", max_length=40)
     suffix = " (%s).strm" % movie.id
@@ -137,22 +147,91 @@ def movie_strm_content(base_url: str, movie: Movie) -> str:
     )
 
 
+def movie_nfo_path(root: str, source: str, movie: Movie) -> str:
+    """Same base name as movie_strm_path, ``.nfo`` instead of ``.strm`` -
+    Kodi's convention for matching a companion metadata file to a video file."""
+    strm_path = movie_strm_path(root, source, movie)
+    return strm_path[: -len(".strm")] + ".nfo"
+
+
+def movie_nfo_content(movie: Movie, source: str, headers: Optional[Dict[str, str]] = None) -> str:
+    """Self-contained NFO: title/plot/art/tag straight from the provider, no
+    online scraper match required. A real account showed many titles the
+    provider itself supplies cleanly (e.g. "Aquaman and the Lost Kingdom")
+    failing to match TMDB once decorated with a resolution/country/id suffix
+    for filename-uniqueness reasons - "No information found ... it won't be
+    added to the library" - so an item could sync correctly and still never
+    appear in Kodi. This sidesteps matching entirely. ``<tag>`` is what lets
+    Kodi's library view filter/browse by the provider's own "LAND | Source"
+    category, the equivalent of the per-source folder movies already get,
+    without depending on file/folder structure Kodi's scanner might not walk
+    (see episode_nfo/show_nfo below for why series can't use a folder for this).
+    """
+    lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', "<movie>"]
+    lines.append("  <title>%s</title>" % _xml_escape(movie.name))
+    if movie.plot:
+        lines.append("  <plot>%s</plot>" % _xml_escape(movie.plot))
+    if movie.year:
+        lines.append("  <year>%d</year>" % movie.year)
+    if movie.genre:
+        lines.append("  <genre>%s</genre>" % _xml_escape(movie.genre))
+    if movie.rating:
+        lines.append("  <rating>%s</rating>" % movie.rating)
+    if movie.icon:
+        lines.append('  <thumb aspect="poster">%s</thumb>'
+                     % _xml_escape(movie.icon + header_suffix(headers)))
+    lines.append("  <tag>%s</tag>" % _xml_escape(source))
+    lines.append("</movie>")
+    return "\n".join(lines) + "\n"
+
+
 def episode_strm_path(root: str, source: str, show_name: str, episode: Episode) -> str:
-    # The show name is deliberately *not* repeated in the filename - Kodi's TV
-    # scanner already identifies the show from the parent folder, and a real
-    # provider's episode titles were observed already embedding the show name
-    # themselves ("<Show> - S01E02 - <Real Title>"). Repeating it a third time
-    # here (folder, filename prefix, and again inside the title) was the main
-    # contributor to real paths exceeding Windows' MAX_PATH - not just the
-    # contrived worst case, but ordinary shows with a moderately long name.
-    source_dir = safe_filename(source, "Other", max_length=40)
-    show_dir = safe_filename(show_name, max_length=60)
+    # No source folder here, unlike movie_strm_path: Kodi's TV scanner expects
+    # <TV root>/<Show>/<episode file>, one fixed level of nesting, not an extra
+    # "source" folder above the show. Confirmed on a real account - with a
+    # source folder in between, Kodi logged "No information found for item
+    # '...\<source folder>\'" for the *source* folder itself and never
+    # descended into the actual show folders beneath it, leaving essentially
+    # the entire series catalogue invisible in Kodi's library. Movies do not
+    # have this problem; Kodi's movie scanner walks arbitrarily deep. The
+    # source is instead recorded as a Kodi tag on the show - see show_nfo_path.
+    show_dir = _show_dir_name(show_name)
     prefix = "S%02dE%02d - " % (episode.season, episode.episode)
     suffix = " (%s).strm" % episode.id
-    budget = _budget_for(root, source_dir, show_dir, prefix, suffix, separators=3)
+    budget = _budget_for(root, show_dir, prefix, suffix, separators=2)
     title = safe_filename(episode.title, "Episode", max_length=budget)
     filename = prefix + title + suffix
-    return os.path.join(root, source_dir, show_dir, filename)
+    return os.path.join(root, show_dir, filename)
+
+
+def show_nfo_path(root: str, show_name: str) -> str:
+    """Kodi's convention for a show's own metadata (as opposed to a single
+    episode's): a fixed filename, ``tvshow.nfo``, directly in the show's
+    folder - not matched to any one episode file."""
+    return os.path.join(root, _show_dir_name(show_name), "tvshow.nfo")
+
+
+def show_nfo_content(show: Series, source: str, headers: Optional[Dict[str, str]] = None) -> str:
+    """One per show, not per episode - the source is a property of the show,
+    and Kodi's TV tag filtering works at the show level. See movie_nfo_content
+    for why a self-contained NFO is used at all rather than relying on an
+    online scraper match."""
+    lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', "<tvshow>"]
+    lines.append("  <title>%s</title>" % _xml_escape(show.name))
+    if show.plot:
+        lines.append("  <plot>%s</plot>" % _xml_escape(show.plot))
+    if show.year:
+        lines.append("  <year>%d</year>" % show.year)
+    if show.genre:
+        lines.append("  <genre>%s</genre>" % _xml_escape(show.genre))
+    if show.rating:
+        lines.append("  <rating>%s</rating>" % show.rating)
+    if show.cover:
+        lines.append('  <thumb aspect="poster">%s</thumb>'
+                     % _xml_escape(show.cover + header_suffix(headers)))
+    lines.append("  <tag>%s</tag>" % _xml_escape(source))
+    lines.append("</tvshow>")
+    return "\n".join(lines) + "\n"
 
 
 def episode_strm_content(base_url: str, episode: Episode) -> str:
@@ -181,7 +260,7 @@ def _write_if_changed(path: str, content: str) -> bool:
 
 
 def _prune(root: str, wanted: Dict[str, str]) -> int:
-    """Removes every ``.strm`` under ``root`` that is not in ``wanted``.
+    """Removes every ``.strm``/``.nfo`` under ``root`` that is not in ``wanted``.
 
     A title dropped by the provider (or that fell out of the country filter)
     should disappear from Kodi's library on the next sync, the same way deleting
@@ -190,7 +269,7 @@ def _prune(root: str, wanted: Dict[str, str]) -> int:
     removed = 0
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
-            if not name.endswith(".strm"):
+            if not (name.endswith(".strm") or name.endswith(".nfo")):
                 continue
             path = os.path.join(dirpath, name)
             if path not in wanted:
@@ -207,11 +286,14 @@ def _noop_error(path: str, exc: Exception) -> None:  # pragma: no cover - defaul
 
 
 def sync_movies(root: str, movies: Iterable[Tuple[str, Movie]], base_url: str,
-                 on_error: ErrorFn = _noop_error) -> Tuple[int, int]:
+                 on_error: ErrorFn = _noop_error,
+                 headers: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
     """``movies``: (source category name, movie) pairs. Returns ``(written, removed)``."""
     os.makedirs(root, exist_ok=True)
-    wanted = {movie_strm_path(root, source, movie): movie_strm_content(base_url, movie)
-              for source, movie in movies}
+    wanted: Dict[str, str] = {}
+    for source, movie in movies:
+        wanted[movie_strm_path(root, source, movie)] = movie_strm_content(base_url, movie)
+        wanted[movie_nfo_path(root, source, movie)] = movie_nfo_content(movie, source, headers)
     written = 0
     for path, content in wanted.items():
         try:
@@ -227,14 +309,16 @@ def sync_movies(root: str, movies: Iterable[Tuple[str, Movie]], base_url: str,
     return written, removed
 
 
-def sync_episodes(root: str, shows: Iterable[Tuple[str, str, Iterable[Episode]]],
-                   base_url: str, on_error: ErrorFn = _noop_error) -> Tuple[int, int]:
-    """``shows``: (source category name, show name, that show's episodes) triples."""
+def sync_episodes(root: str, shows: Iterable[Tuple[str, Series, Iterable[Episode]]],
+                   base_url: str, on_error: ErrorFn = _noop_error,
+                   headers: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
+    """``shows``: (source category name, show, that show's episodes) triples."""
     os.makedirs(root, exist_ok=True)
     wanted: Dict[str, str] = {}
-    for source, show_name, episodes in shows:
+    for source, show, episodes in shows:
+        wanted[show_nfo_path(root, show.name)] = show_nfo_content(show, source, headers)
         for episode in episodes:
-            path = episode_strm_path(root, source, show_name, episode)
+            path = episode_strm_path(root, source, show.name, episode)
             wanted[path] = episode_strm_content(base_url, episode)
     written = 0
     for path, content in wanted.items():

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="plugin.video.xstreamflex"
        name="XstreamFlex"
-       version="0.2.4"
+       version="0.3.0"
        provider-name="adriebaselmans">
   <requires>
     <import addon="xbmc.python" version="3.0.1"/>
@@ -23,7 +23,22 @@
       <icon>icon.png</icon>
       <fanart>fanart.jpg</fanart>
     </assets>
-    <news>0.2.4 - Fix the automatic post-sync library scan not actually working (a manual "Update
+    <news>0.3.0 - Add a companion .nfo next to every movie/episode's .strm file, self-contained
+(title/plot/year/genre/rating/poster from the provider itself, no online scraper match needed) and
+tagged with the provider's own "LAND | Source" category (Netflix, Videoland, Bioscoop, ...). Kodi's
+library view can filter/browse by Tag the same way it does Genre, bringing back quick per-source
+browsing for series too (lost in 0.2.5 when the source folder had to be removed there) without
+depending on folder structure. Also fixes titles silently missing from the library because TMDB
+couldn't match a decorated filename ("Aquaman and the Lost Kingdom 4K (NL) (851703)") - there is
+nothing left to match now.
+0.2.5 - Fix series still not appearing in Kodi despite syncing correctly (2 shows visible
+out of 2389): the per-source folder introduced in 0.2.2 broke Kodi's TV scanner, which expects exactly
+one level of nesting (TV root/Show/episodes) and does not look inside an intermediate folder it fails
+to recognize as a show - confirmed in the log, Kodi reported "No information found" for the *source*
+folder itself and never descended into the real show folders beneath it. Movies keep their source
+folder (confirmed working, Kodi's movie scanner is not as strict); episodes now sit directly under
+their show folder with no source folder above it.
+0.2.4 - Fix the automatic post-sync library scan not actually working (a manual "Update
 library" in Kodi's own UI was required): the raw VideoLibrary.Scan JSON-RPC call reported success but
 its scan aborted after a single item, likely a race with Kodi's own directory cache right after tens
 of thousands of files were just written. Now triggers the scan the same way Kodi's own "Update
