@@ -106,12 +106,18 @@ def write_m3u(
                 # Written for every channel, never conditionally: the reference
                 # provider refuses media requests without a User-Agent (454), and a
                 # per-channel option cannot be forgotten the way a global setting can.
+                #
+                # Quoted, not bare: IPTV Simple's own M3U parser
+                # (PlaylistLoader::ReadMarkerValue) reads an EXTVLCOPT value up to the
+                # first space unless it is wrapped in double quotes, so an unquoted
+                # "Mozilla/5.0 (...)" silently becomes just "Mozilla/5.0" downstream
+                # and the provider then refuses the truncated header.
                 channel_ua = channel.headers.get("User-Agent") or user_agent
                 if channel_ua:
-                    handle.write("#EXTVLCOPT:http-user-agent=%s\n" % channel_ua)
+                    handle.write('#EXTVLCOPT:http-user-agent="%s"\n' % _escape_attr(channel_ua))
                 channel_referer = channel.headers.get("Referer") or referer
                 if channel_referer:
-                    handle.write("#EXTVLCOPT:http-referrer=%s\n" % channel_referer)
+                    handle.write('#EXTVLCOPT:http-referrer="%s"\n' % _escape_attr(channel_referer))
 
                 props = dict(extra_props or {})
                 props.update(channel.kodi_props)

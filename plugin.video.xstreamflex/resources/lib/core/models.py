@@ -243,6 +243,9 @@ class StreamRef:
     mime_type: str = ""
     inputstream: str = ""
     alternatives: List[str] = field(default_factory=list)
+    # Only a live broadcast may use ffmpegdirect's realtime/timeshift mode; a VOD
+    # movie or episode is a static file even when its container happens to be .ts.
+    live: bool = False
 
     def with_url(self, url: str) -> "StreamRef":
         return StreamRef(
@@ -251,6 +254,7 @@ class StreamRef:
             mime_type=self.mime_type,
             inputstream=self.inputstream,
             alternatives=list(self.alternatives),
+            live=self.live,
         )
 
 

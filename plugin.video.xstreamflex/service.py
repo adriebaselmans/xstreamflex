@@ -13,6 +13,7 @@ import xbmc  # noqa: E402
 
 from core.errors import ProviderError  # noqa: E402
 from core.export.exporter import export_channels, is_stale  # noqa: E402
+from core.proxy import ProxyServer  # noqa: E402
 from kodiui.context import Context  # noqa: E402
 
 CHECK_INTERVAL_SECONDS = 300
@@ -57,6 +58,12 @@ def main() -> None:
     monitor = xbmc.Monitor()
     context.log("info", "service started")
 
+    # Each plugin:// invocation Kodi makes is its own short-lived interpreter and
+    # cannot host a server spanning the length of a movie; this process is the
+    # only long-lived one, so playback's local proxy (core.proxy) lives here.
+    proxy = ProxyServer(logger=context.log)
+    proxy.start()
+
     if context.setting_bool("export_on_startup", True) and context.setting_bool(
         "export_enabled", True
     ):
@@ -71,6 +78,7 @@ def main() -> None:
         if context.setting_bool("export_enabled", True):
             _run_export(context)
 
+    proxy.stop()
     context.log("info", "service stopped")
 
 

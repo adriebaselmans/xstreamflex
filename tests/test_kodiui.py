@@ -16,7 +16,8 @@ from conftest import FakeClient, load_fixture  # noqa: E402
 
 from core.config import ProviderConfig  # noqa: E402
 from core.errors import EndpointDisabledError  # noqa: E402
-from kodiui import router  # noqa: E402
+from core.models import Movie, StreamRef  # noqa: E402
+from kodiui import listing, play, router  # noqa: E402
 from kodiui.context import Context  # noqa: E402
 
 
@@ -82,6 +83,32 @@ def test_categories_are_listed(tmp_path):
     assert "Action" in labels()
 
 
+def test_categories_can_be_filtered_by_country_prefix(tmp_path):
+    context = make_context(tmp_path, responses={
+        "get_vod_categories": [
+            {"category_id": "1", "category_name": "NL | Filmclub 2026"},
+            {"category_id": "2", "category_name": "nl-Netflix"},
+            {"category_id": "3", "category_name": "BE | Cinemax"},
+            {"category_id": "4", "category_name": "UK | HD"},
+        ],
+    })
+    router.dispatch(context, "?action=categories&kind=vod&country=NL")
+
+    joined = " ".join(labels())
+    assert "Filmclub" in joined and "Netflix" in joined
+    assert "Cinemax" not in joined and "HD" not in joined
+
+
+def test_categories_without_a_matching_country_notify_instead_of_a_blank_list(tmp_path):
+    context = make_context(tmp_path, responses={
+        "get_vod_categories": [{"category_id": "3", "category_name": "BE | Cinemax"}],
+    })
+    router.dispatch(context, "?action=categories&kind=vod&country=NL")
+
+    assert kodistubs.notifications
+    assert "NL" in kodistubs.notifications[0][1]
+
+
 def test_movies_are_listed_as_playable(tmp_path):
     context = make_context(tmp_path, responses={
         "get_vod_streams": load_fixture("vod_streams.json"),
@@ -125,6 +152,45 @@ def test_play_channel_resolves_with_headers(tmp_path):
     assert item.mimetype == "video/mp2t"
 
 
+def test_play_movie_uses_the_proxy_when_available(tmp_path, monkeypatch):
+    proxied = StreamRef(url="http://127.0.0.1:19191/stream/tok/1.mkv", headers={})
+    monkeypatch.setattr(play, "proxied_ref", lambda ref: proxied)
+    context = make_context(tmp_path)
+
+    router.dispatch(context, "?action=play_movie&movie_id=1&ext=mkv&title=x")
+
+    succeeded, item = kodistubs.resolved[0]
+    assert succeeded is True
+    assert item.path.startswith("http://127.0.0.1:19191/stream/tok/1.mkv")
+
+
+def test_play_movie_falls_back_to_the_direct_url_when_the_proxy_is_unreachable(tmp_path, monkeypatch):
+    """core.proxy.client_register returns None when service.py's proxy isn't
+    reachable; playback must still work exactly as it did before the proxy."""
+    monkeypatch.setattr(play, "proxied_ref", lambda ref: None)
+    context = make_context(tmp_path)
+
+    router.dispatch(context, "?action=play_movie&movie_id=1&ext=mkv&title=x")
+
+    succeeded, item = kodistubs.resolved[0]
+    assert succeeded is True
+    assert "127.0.0.1" not in item.path
+    assert item.path.startswith("http://host:8080/movie/u/p/1.mkv")
+
+
+def test_play_channel_is_not_proxied(tmp_path, monkeypatch):
+    """Live TV plays through Kodi's PVR section in normal use; this action
+    exists but proxying it is out of scope for the VOD failures this fixes."""
+    def boom(ref):
+        raise AssertionError("live playback must not go through the proxy")
+    monkeypatch.setattr(play, "proxied_ref", boom)
+    context = make_context(tmp_path)
+
+    router.dispatch(context, "?action=play_channel&channel_id=843174&title=NPO1")
+
+    assert kodistubs.resolved[0][0] is True
+
+
 def test_play_stops_existing_playback_on_single_connection_accounts(tmp_path):
     kodistubs.Player.playing = True
     context = make_context(tmp_path)
@@ -164,7 +230,7 @@ def test_export_writes_a_playlist(tmp_path):
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
     assert text.startswith("#EXTM3U")
-    assert "#EXTVLCOPT:http-user-agent=UA/1.0" in text
+    assert '#EXTVLCOPT:http-user-agent="UA/1.0"' in text
     assert "http://host:8080/live/u/p/843174.ts" in text
     assert kodistubs.notifications
 
@@ -260,3 +326,63 @@ def test_the_route_guard_reports_a_crashing_handler(tmp_path):
         assert any("kaboom" in message for _, message in kodistubs.log_lines)
     finally:
         del router._HANDLERS["_test_boom"]
+
+
+# -- VOD playback uses ffmpegdirect for its real HTTP reconnect, not realtime mode
+
+def test_vod_playback_uses_ffmpegdirect_without_realtime_mode():
+    """A movie/episode file is static; ffmpegdirect's timeshift mode is for a
+    continuously growing live buffer and fails or refuses to seek on a VOD file.
+    Plain (non-realtime) ffmpegdirect is still used, for ffmpeg's own HTTP
+    reconnect — Kodi's native player retries a failed open exactly once, about
+    35ms later, which is not enough to ride out a provider's transient blip."""
+    kodistubs.Addon.installed.add("inputstream.ffmpegdirect")
+    try:
+        ref = StreamRef(url="http://host/movie/u/p/1.mp4", headers={"User-Agent": "UA"})
+        item = play.build_list_item(ref, "Some Movie")
+        assert item.getProperty("inputstream") == "inputstream.ffmpegdirect"
+        assert item.getProperty("inputstream.ffmpegdirect.is_realtime_stream") == "false"
+        assert item.getProperty("inputstream.ffmpegdirect.stream_mode") == ""
+        assert item.getProperty("inputstream.ffmpegdirect.open_mode") == "ffmpeg"
+        assert "reconnect=1" in item.path
+        assert "reconnect_streamed=1" in item.path
+        assert "reconnect_at_eof" not in item.path
+    finally:
+        kodistubs.Addon.installed.discard("inputstream.ffmpegdirect")
+
+
+def test_vod_playback_falls_back_to_kodis_default_player_without_ffmpegdirect():
+    ref = StreamRef(url="http://host/movie/u/p/1.mp4", headers={"User-Agent": "UA"})
+    item = play.build_list_item(ref, "Some Movie")
+    assert item.getProperty("inputstream") == ""
+    assert "reconnect" not in item.path
+
+
+def test_live_ts_playback_still_uses_ffmpegdirect_timeshift_when_available():
+    kodistubs.Addon.installed.add("inputstream.ffmpegdirect")
+    try:
+        ref = StreamRef(url="http://host/live/u/p/1.ts", headers={"User-Agent": "UA"},
+                        live=True)
+        item = play.build_list_item(ref, "Some Channel")
+        assert item.getProperty("inputstream") == "inputstream.ffmpegdirect"
+        assert item.getProperty("inputstream.ffmpegdirect.is_realtime_stream") == "true"
+        assert item.getProperty("inputstream.ffmpegdirect.stream_mode") == "timeshift"
+        assert item.getProperty("inputstream.ffmpegdirect.open_mode") == "ffmpeg"
+        assert "reconnect_at_eof=1" in item.path
+    finally:
+        kodistubs.Addon.installed.discard("inputstream.ffmpegdirect")
+
+
+# -- Artwork needs the provider's User-Agent just as much as playback does --
+
+def test_movie_poster_carries_the_required_user_agent():
+    movie = Movie(id="1", name="Some Movie", icon="http://img/poster.jpg")
+    _, item, _ = listing.movie_item("plugin://x/", movie, {"User-Agent": "UA/1.0"})
+    assert item.art["poster"] == "http://img/poster.jpg|User-Agent=UA%2F1.0"
+    assert item.art["thumb"] == item.art["poster"]
+
+
+def test_movie_poster_without_headers_is_unchanged():
+    movie = Movie(id="1", name="Some Movie", icon="http://img/poster.jpg")
+    _, item, _ = listing.movie_item("plugin://x/", movie)
+    assert item.art["poster"] == "http://img/poster.jpg"

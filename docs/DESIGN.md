@@ -212,7 +212,7 @@ Per channel:
 
 ```
 #EXTINF:-1 tvg-id="npo1.nl" tvg-name="..." tvg-chno="12" tvg-logo="..." group-title="...",Channel Name
-#EXTVLCOPT:http-user-agent=<ua>
+#EXTVLCOPT:http-user-agent="<ua>"
 #KODIPROP:mimetype=video/mp2t
 http://host:8080/live/user/pass/12345.ts
 ```
@@ -221,6 +221,12 @@ http://host:8080/live/user/pass/12345.ts
 refuses UA-less media requests with 454, and IPTV Simple's global `defaultUserAgent` is easy for a
 user to miss. `#KODIPROP:mimetype` is written only for `.ts`, where it measurably speeds up player
 selection; HLS is left for Kodi to sniff.
+
+The value is **always double-quoted**, even though the M3U/VLC convention does not require it.
+IPTV Simple's own parser (`PlaylistLoader::ReadMarkerValue`) reads an `EXTVLCOPT` value up to the
+first unquoted space; a real User-Agent string such as `Mozilla/5.0 (Linux; Android 12) Chrome/120.0`
+would otherwise be silently truncated to `Mozilla/5.0` downstream, and the provider then refuses the
+incomplete header — the export looks correct in the file, but playback still fails.
 
 `tvg-id` carries the provider's `epg_channel_id` and is left **empty** when there is none. Falling
 back to the stream id would emit an identifier that appears in no XMLTV feed, and would also stop
@@ -314,14 +320,53 @@ play channels through a path with no EPG and no channel numbering.
 
 `play.py` resolves a `StreamRef` and applies headers by appending them to the URL in Kodi's
 `|Header=value` form, which is the only mechanism that survives the hand-off to the player. It picks
-`inputstream.adaptive` for HLS when installed, `inputstream.ffmpegdirect` for MPEG-TS when installed,
-and otherwise leaves Kodi's default.
+`inputstream.adaptive` for HLS when installed, and `inputstream.ffmpegdirect` for everything else
+(live MPEG-TS) when installed, falling back to Kodi's own native player otherwise. `StreamRef.live`
+gates the realtime/timeshift properties — a VOD movie or episode is a static file even when its
+container happens to be `.ts`, and timeshift mode expects a continuously growing live buffer, not a
+file that can be seeked and has a known duration.
+
+### VOD reliability: `core/proxy.py`, not an inputstream property
+
+Movies and episodes (`ref.live is False`) are routed through a local HTTP proxy instead: `router._play()`
+calls `play.proxied_ref()`, which asks `core.proxy.client_register()` to hand the URL to the proxy
+server running inside `service.py`, and swaps in `http://127.0.0.1:19191/stream/<token>/<filename>` if
+that succeeds. Falls back to the direct provider URL, unchanged, if the proxy isn't reachable (service
+not started yet, or failed to bind its port).
+
+This exists because the reference provider answers a **hard HTTP error on the very first request**
+for a stream that will work moments later (see `docs/PROVIDER-FINDINGS.md` conclusion 7), and nothing
+reachable from a Kodi add-on can retry that reliably:
+
+- Kodi's own native player (`CCurlFile`) retries a failed open exactly once, ~35ms later — not
+  enough to wait out even a brief blip.
+- `inputstream.ffmpegdirect`'s ffmpeg-backed HTTP protocol (0.1.6/0.1.7) *can* retry, but only for a
+  connection that drops after being established (`reconnect`/`reconnect_streamed`/`reconnect_at_eof`).
+  The option for retrying a clean HTTP error status on the *first* request,
+  `reconnect_on_http_error`, is not in the fixed whitelist of protocol options the installed version
+  of that add-on forwards to ffmpeg (`src/stream/FFmpegStream.cpp`, `GetFFMpegOptionsFromInput`) — so
+  it can never be reached from Python, no matter what URL options or item properties are set. This
+  also required forcing `inputstream.ffmpegdirect.open_mode=ffmpeg` (left at its default, it silently
+  picks `OpenMode::CURL` for a plain non-HLS/DASH/RTSP URL and hands I/O back to Kodi's own `CCurlFile`
+  anyway — the addon's own debug log, `OpenWithCURL - IO handled by Kodi's cURL`, is what exposed this).
+- A pre-flight reachability probe (0.1.3, reverted 0.1.4, re-added 0.1.5, removed 0.1.6) added latency
+  without a reliability guarantee: success moments before Kodi's own request says nothing about that
+  later, separate request's outcome, since the provider's bad windows are themselves sub-second to
+  multi-second.
+
+The proxy sidesteps all of it: Kodi talks to `127.0.0.1`, which is always instant and reliable, while
+`core/proxy.py` makes the real request through `HttpClient.open_stream()` — full control over which
+statuses to retry and how, the same retry/backoff every other provider call already gets — and only
+starts writing a response once it actually has one. A `Range` header from a seek is translated into an
+upstream `Range` request the same way, so seeking gets the same resilience as the initial open.
+`core.proxy.DEFAULT_PORT` (19191) is fixed rather than discovered, because each `plugin://` action Kodi
+invokes is a fresh, short-lived interpreter — it has no way to learn a port chosen by the long-lived
+`service.py` process short of a fixed rendezvous point or a file on disk, and a fixed port is simpler.
 
 `StreamRef.alternatives` carries the `ts` → `m3u8` → `direct_source` chain, but **nothing consumes it
-yet**. Automatic failover would mean probing a second URL, and on a `max_connections: 1` account that
-probe competes with the stream the user is already trying to watch. Choosing between "retry
-automatically" and "respect the connection limit" needs a real box to measure on, so for now the
-chain is data the UI does not act on. Tracked in [ROADMAP.md](ROADMAP.md).
+yet**. That is a different question from the proxy above — it is about falling back to a *different*
+URL, which costs a connection attempt against a URL that has not already been chosen, not about riding
+out a failure on the one already in use. Tracked in [ROADMAP.md](ROADMAP.md).
 
 `listing.py` builds `ListItem`s and fills `InfoTagVideo` through the Kodi 20+ setters
 (`xbmc.InfoTagVideo`), not the removed `setInfo()` dictionary API, and sets `mediatype` so Kodi's

@@ -106,6 +106,7 @@ class M3UProvider(BaseProvider):
             headers=headers,
             mime_type=mime,
             inputstream=channel.kodi_props.get("inputstream", ""),
+            live=True,
         )
 
 

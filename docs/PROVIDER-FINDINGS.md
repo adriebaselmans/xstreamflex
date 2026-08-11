@@ -59,6 +59,37 @@ number", not as transport errors.
    browsing, and stop current playback before starting anything new.
 6. **XMLTV is healthy.** 31 MB in under a second, complete and well-formed. There is no reason to
    proxy or cache it — IPTV Simple can fetch it directly.
+7. **The media backend has brief bad windows — anywhere from under a second to tens of seconds —
+   where it answers 502**, then recovers on its own. This is nginx failing to reach its upstream, not
+   a connection-limit rejection (that is 456, see above). It is also not reliably tied to how many
+   connections the client itself holds open: measured with a Python probe immediately followed by an
+   independent `curl` request to the same URL, both attempts failed together as often as both
+   succeeding, and — separately — a probe succeeding said nothing about whether Kodi's own request a
+   few hundred ms later would also succeed. A pre-flight reachability probe was tried at three
+   different points (added 0.1.3, reverted 0.1.4 on a "competing connection" theory, re-added 0.1.5
+   after that theory failed to hold up) and **removed for good in 0.1.6**: it cannot fix a backend
+   whose bad windows are themselves sub-second to multi-second, because there is no delay short enough
+   to feel instant and long enough to reliably outlast one.
+   **Also does not respond to a dropped-connection reconnect** (0.1.6/0.1.7,
+   `inputstream.ffmpegdirect`'s `reconnect`/`reconnect_streamed` options): the failure mode here is a
+   clean HTTP error status on the *first* request, not a connection that was fine and then dropped.
+   ffmpeg has a separate option for that, `reconnect_on_http_error`, but the installed version of
+   `inputstream.ffmpegdirect` does not forward it — confirmed by reading its source
+   (`src/stream/FFmpegStream.cpp`, `GetFFMpegOptionsFromInput`): it only passes a fixed whitelist of
+   protocol options to ffmpeg (`reconnect`, `reconnect_at_eof`, `reconnect_streamed`,
+   `reconnect_delay_max`, a few others) and silently drops anything else. No Kodi item property or URL
+   option can reach an option that specific add-on build does not forward.
+   **The fix that actually works (0.1.8): a local HTTP proxy, `core/proxy.py`.** Kodi talks to
+   `127.0.0.1` instead of the provider directly; the proxy makes the real request through
+   `HttpClient.open_stream()` — the same retry/backoff every other provider call already gets, with
+   full control over which statuses count as retryable — and only starts writing a response once it
+   actually has one. This is the same class of resilience a player like TiviMate has via its own full
+   HTTP stack (ExoPlayer's `LoadErrorHandlingPolicy`, ExoPlayer for TiviMate; libVLC's HTTP access
+   module for VLC), neither of which is constrained by what a specific Kodi companion add-on happens to
+   expose. See `docs/DESIGN.md`.
+   A stuck/zombie session on the provider's own backend is a separate, real failure mode
+   (`active_cons` can read 1 with every local client fully closed) but is not what this conclusion is
+   about; it clears on its own after a few minutes and is not something the add-on can hurry along.
 
 ## Open question
 

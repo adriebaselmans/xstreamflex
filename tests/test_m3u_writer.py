@@ -26,9 +26,20 @@ def test_writes_user_agent_for_every_channel(tmp_path):
     text = read(out)
     # A provider that answers 454 without a UA refuses every channel, so the
     # option must appear once per entry, not once per file.
-    assert text.count("#EXTVLCOPT:http-user-agent=TestUA/1.0") == 2
+    assert text.count('#EXTVLCOPT:http-user-agent="TestUA/1.0"') == 2
     assert result.channel_count == 2
     assert result.group_count == 1
+
+
+def test_user_agent_with_spaces_is_quoted(tmp_path):
+    """IPTV Simple's own M3U parser reads an EXTVLCOPT value up to the first
+    space unless it is double-quoted, silently truncating a bare UA string."""
+    out = str(tmp_path / "channels.m3u")
+    write_m3u(out, [channel()], lambda c: "http://host/live/u/p/1.ts",
+              user_agent="Mozilla/5.0 (Linux; Android 12) Chrome/120.0")
+
+    text = read(out)
+    assert '#EXTVLCOPT:http-user-agent="Mozilla/5.0 (Linux; Android 12) Chrome/120.0"' in text
 
 
 def test_ts_gets_mimetype_hls_does_not(tmp_path):

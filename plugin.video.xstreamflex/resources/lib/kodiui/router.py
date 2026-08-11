@@ -72,6 +72,20 @@ def _require_provider(context: Context):
     return provider, config
 
 
+def _image_headers(config) -> Dict[str, str]:
+    """Headers artwork requests need to survive a provider that requires a UA.
+
+    Kodi fetches poster/thumb/logo URLs itself, outside the playback hand-off, so
+    without this a provider that refuses unauthenticated requests (see
+    PROVIDER-FINDINGS.md) refuses the artwork too and the VOD listing falls back to
+    blank icons instead of posters.
+    """
+    headers = {"User-Agent": config.user_agent} if config.user_agent else {}
+    if config.referer:
+        headers["Referer"] = config.referer
+    return headers
+
+
 # -- menus ---------------------------------------------------------------
 
 @route("root")
@@ -145,19 +159,32 @@ def noop(context: Context, params) -> None:
     listing.finish(context.handle, [])
 
 
+def _matches_country(category_name: str, country: str) -> bool:
+    """Matches the provider's own "NL | Filmclub 2026" naming: the country code
+    at the very start, whatever punctuation follows it (``|``, ``-``, ``:``, a
+    plain space). Case-insensitive since panels are not consistent about it."""
+    name = category_name.strip()
+    return name[:len(country)].casefold() == country.casefold()
+
+
 @route("categories")
 def categories(context: Context, params) -> None:
     kind = params.get("kind", VOD)
+    country = params.get("country", "")
     provider, _ = _require_provider(context)
+    all_categories = provider.categories(kind)
+    matching = ([c for c in all_categories if _matches_country(c.name, country)]
+                if country else all_categories)
     items = [
         listing.folder_item(
             category.name,
             _url(context, "items", kind=kind, category_id=category.id),
         )
-        for category in provider.categories(kind)
+        for category in matching
     ]
     if not items:
-        dialogs.notify("This provider has no %s categories." % kind)
+        dialogs.notify("This provider has no %s categories%s." % (
+            kind, (' starting with "%s"' % country) if country else ""))
     listing.finish(context.handle, items)
 
 
@@ -165,18 +192,19 @@ def categories(context: Context, params) -> None:
 def items(context: Context, params) -> None:
     kind = params.get("kind", VOD)
     category_id = params.get("category_id", "")
-    provider, _ = _require_provider(context)
+    provider, config = _require_provider(context)
+    headers = _image_headers(config)
 
     if kind == VOD:
-        entries = [listing.movie_item(context.base_url, movie)
+        entries = [listing.movie_item(context.base_url, movie, headers)
                    for movie in provider.movies(category_id)]
         listing.finish(context.handle, entries, content="movies")
     elif kind == SERIES:
-        entries = [listing.series_item(context.base_url, show)
+        entries = [listing.series_item(context.base_url, show, headers)
                    for show in provider.series(category_id)]
         listing.finish(context.handle, entries, content="tvshows")
     else:
-        entries = [listing.channel_item(context.base_url, channel)
+        entries = [listing.channel_item(context.base_url, channel, headers=headers)
                    for channel in provider.channels(category_id)]
         listing.finish(context.handle, entries)
 
@@ -184,12 +212,13 @@ def items(context: Context, params) -> None:
 @route("seasons")
 def seasons(context: Context, params) -> None:
     series_id = params.get("series_id", "")
-    provider, _ = _require_provider(context)
+    provider, config = _require_provider(context)
+    headers = _image_headers(config)
     show, episodes = provider.series_info(series_id)
 
     numbers = sorted({episode.season for episode in episodes})
     if len(numbers) <= 1:
-        entries = [listing.episode_item(context.base_url, episode, show.name)
+        entries = [listing.episode_item(context.base_url, episode, show.name, headers)
                    for episode in episodes]
         listing.finish(context.handle, entries, content="episodes")
         return
@@ -199,6 +228,7 @@ def seasons(context: Context, params) -> None:
             "Season %d" % number,
             _url(context, "episodes", series_id=series_id, season=str(number)),
             icon=show.cover,
+            headers=headers,
         )
         for number in numbers
     ]
@@ -209,10 +239,11 @@ def seasons(context: Context, params) -> None:
 def episodes(context: Context, params) -> None:
     series_id = params.get("series_id", "")
     season = int(params.get("season", "0") or 0)
-    provider, _ = _require_provider(context)
+    provider, config = _require_provider(context)
+    headers = _image_headers(config)
     show, all_episodes = provider.series_info(series_id)
     entries = [
-        listing.episode_item(context.base_url, episode, show.name)
+        listing.episode_item(context.base_url, episode, show.name, headers)
         for episode in all_episodes if episode.season == season
     ]
     listing.finish(context.handle, entries, content="episodes")
@@ -252,6 +283,20 @@ def _play(context: Context, ref, label: str, config) -> None:
     if config.max_connections <= 1:
         # The provider counts the old session for a moment after the player lets go.
         play.stop_current_playback()
+    if not ref.live:
+        # Live TV plays through Kodi's own PVR section (IPTV Simple), not this
+        # action, in normal use - this branch is VOD in practice. ffmpegdirect's
+        # reconnect options were tried here first (0.1.6/0.1.7) and did not help:
+        # this provider answers a hard HTTP error on the very first request
+        # rather than dropping an established connection, and the ffmpeg option
+        # for that (reconnect_on_http_error) is not in the whitelist the
+        # installed inputstream.ffmpegdirect forwards to ffmpeg. Proxying through
+        # core.proxy fixes this at the only layer left that we fully control: the
+        # request itself, retried before Kodi ever sees a response. Falls back to
+        # the direct URL if the proxy (running in service.py) isn't reachable.
+        proxied = play.proxied_ref(ref)
+        if proxied is not None:
+            ref = proxied
     play.resolve(context.handle, ref, label, context.log)
 
 

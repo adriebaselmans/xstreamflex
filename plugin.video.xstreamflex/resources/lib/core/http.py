@@ -221,6 +221,29 @@ class HttpClient:
         finally:
             response.close()
 
+    def open_stream(self, url: str, *, headers: Optional[Dict[str, str]] = None,
+                     range_header: Optional[str] = None, timeout=None):
+        """Open a streamed GET for a caller to forward byte-for-byte.
+
+        Built for ``core.proxy``: Kodi's own player retries a failed connection
+        exactly once, milliseconds later, which is not enough to ride out this
+        provider's brief backend hiccups. The proxy lets Kodi talk to localhost
+        instead, and uses this method to make the real, patient request — by the
+        time this returns or raises, the session's retry adapter has already
+        retried 429/500/502/503/504 with backoff, same as every other method here.
+
+        Returns the raw ``requests.Response`` (``status_code``, ``headers``,
+        ``iter_content``, ``close``) rather than a project type, since forwarding
+        it as-is is the whole point — translating a Range request into an upstream
+        Range request is what makes a seek get this same resilience.
+        """
+        req_headers = dict(headers or {})
+        if range_header:
+            req_headers["Range"] = range_header
+        response = self._request("GET", url, stream=True, headers=req_headers, timeout=timeout)
+        self._check(response, url)
+        return response
+
     def download(self, url: str, dest_path: str, *, params=None, chunk: int = 65536) -> int:
         response = self._request("GET", url, params=params, stream=True)
         self._check(response, url)

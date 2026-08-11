@@ -301,6 +301,7 @@ class XtreamProvider(BaseProvider):
             headers=self._headers(),
             mime_type="video/mp2t" if preferred == "ts" else "",
             alternatives=alternatives,
+            live=True,
         )
 
     def movie_stream(self, movie: Movie) -> StreamRef:
