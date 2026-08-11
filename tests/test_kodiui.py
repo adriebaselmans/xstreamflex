@@ -96,9 +96,12 @@ def test_sync_library_writes_strm_files_for_matching_categories_only(tmp_path):
     router.dispatch(context, "?action=sync_library&country=NL")
 
     movies_dir = os.path.join(context.library_dir, "movies")
-    files = [f for f in os.listdir(movies_dir) if f.endswith(".strm")]
-    assert len(files) == 1
-    with open(os.path.join(movies_dir, files[0]), encoding="utf-8") as handle:
+    assert os.path.isdir(os.path.join(movies_dir, "NL Filmclub"))
+    strm_files = [os.path.join(dirpath, name)
+                 for dirpath, _dirs, names in os.walk(movies_dir)
+                 for name in names if name.endswith(".strm")]
+    assert len(strm_files) == 1
+    with open(strm_files[0], encoding="utf-8") as handle:
         content = handle.read()
     assert "action=play_movie" in content and "movie_id=555" in content
 
@@ -114,12 +117,12 @@ def test_sync_library_writes_episodes_under_a_show_folder(tmp_path):
     router.dispatch(context, "?action=sync_library&country=NL")
 
     series_dir = os.path.join(context.library_dir, "series")
-    show_dirs = os.listdir(series_dir)
-    assert len(show_dirs) == 1
-    episode_files = [f for f in os.listdir(os.path.join(series_dir, show_dirs[0]))
-                     if f.endswith(".strm")]
+    assert os.path.isdir(os.path.join(series_dir, "NL Series"))
+    episode_files = [os.path.join(dirpath, name)
+                     for dirpath, _dirs, names in os.walk(series_dir)
+                     for name in names if name.endswith(".strm")]
     assert episode_files
-    with open(os.path.join(series_dir, show_dirs[0], episode_files[0]), encoding="utf-8") as handle:
+    with open(episode_files[0], encoding="utf-8") as handle:
         assert "action=play_episode" in handle.read()
 
 

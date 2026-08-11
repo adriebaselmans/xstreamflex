@@ -47,44 +47,86 @@ def matches_country(category_name: str, country: str) -> bool:
     return not name[len(country):len(country) + 1].isalnum()
 
 
-def collect_movies(provider, country: str, progress: Optional[ProgressFn] = None) -> List[Movie]:
+def collect_movies(
+    provider, country: str, progress: Optional[ProgressFn] = None
+) -> List[Tuple[str, Movie]]:
+    """Returns ``(source category name, movie)`` pairs - one pair per occurrence,
+    so a movie listed under two sources (e.g. both "NL | Netflix" and
+    "NL | Videoland") appears once per source, matching the provider's own
+    structure instead of silently collapsing it."""
     categories = [c for c in provider.categories(VOD) if matches_country(c.name, country)]
-    movies: List[Movie] = []
+    result: List[Tuple[str, Movie]] = []
     for index, category in enumerate(categories, 1):
         if progress:
             progress(index, len(categories), category.name)
-        movies.extend(provider.movies(category.id))
-    return movies
+        result.extend((category.name, movie) for movie in provider.movies(category.id))
+    return result
 
 
 def collect_shows_with_episodes(
     provider, country: str, progress: Optional[ProgressFn] = None
-) -> List[Tuple[str, List[Episode]]]:
+) -> List[Tuple[str, str, List[Episode]]]:
     """One provider call per show (no bulk "all episodes" endpoint exists) -
-    the slow part of a library sync, hence its own progress callback."""
+    the slow part of a library sync, hence its own progress callback. Returns
+    ``(source category name, show name, episodes)`` triples."""
     categories = [c for c in provider.categories(SERIES) if matches_country(c.name, country)]
     shows = []
     for category in categories:
-        shows.extend(provider.series(category.id))
+        shows.extend((category.name, show) for show in provider.series(category.id))
 
     result = []
-    for index, show in enumerate(shows, 1):
+    for index, (source, show) in enumerate(shows, 1):
         if progress:
             progress(index, len(shows), show.name)
         _, episodes = provider.series_info(show.id)
-        result.append((show.name, episodes))
+        result.append((source, show.name, episodes))
     return result
 
 
-def safe_filename(name: str, fallback: str = "untitled") -> str:
-    """Strip characters a Windows or POSIX filesystem would reject."""
+#: Headroom under Windows' 260-character MAX_PATH. Kept well below it because
+#: ``root`` (the add-on's profile directory) is itself often 100+ characters
+#: before any of this module's own folders/filenames are added.
+_MAX_PATH = 240
+#: Never shrink a free-text component to less than this - past this point a
+#: name is unrecognisable anyway, and the per-item try/except around every
+#: write (see sync_movies/sync_episodes) is the real backstop if root's own
+#: length alone already leaves no sane budget.
+_MIN_COMPONENT = 8
+
+
+def safe_filename(name: str, fallback: str = "untitled", max_length: int = 80) -> str:
+    """Strip characters a Windows or POSIX filesystem would reject, and cap the
+    length. Also strips trailing dots/spaces, which Windows rejects in a path
+    component and plain ``.strip()`` does not catch.
+    """
     cleaned = _UNSAFE.sub(" ", name or "").strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned[:max_length].rstrip(" .")
     return cleaned or fallback
 
 
-def movie_strm_path(root: str, movie: Movie) -> str:
-    return os.path.join(root, "%s (%s).strm" % (safe_filename(movie.name), movie.id))
+def _budget_for(root: str, *fixed_parts: str, separators: int) -> int:
+    """How many characters are left for the one free-text component in a path,
+    given everything else (``root`` plus every already-decided ``fixed_parts``)
+    is fixed. Some providers put a fully-formatted string ("Show - S01E02 -
+    Real Title") in what is nominally just a title field; combined with this
+    module prepending the show name and episode code again, that can push a
+    filename past Windows' 260-character MAX_PATH, which surfaces as a plain
+    "No such file or directory" rather than anything that says "too long" -
+    computing the budget from the *actual* root length, rather than a fixed
+    per-component cap, is what makes this correct regardless of how long the
+    add-on's own profile path happens to be on a given machine.
+    """
+    used = len(root) + sum(len(p) for p in fixed_parts) + separators
+    return max(_MIN_COMPONENT, _MAX_PATH - used)
+
+
+def movie_strm_path(root: str, source: str, movie: Movie) -> str:
+    source_dir = safe_filename(source, "Other", max_length=40)
+    suffix = " (%s).strm" % movie.id
+    budget = _budget_for(root, source_dir, suffix, separators=2)
+    title = safe_filename(movie.name, max_length=budget)
+    return os.path.join(root, source_dir, title + suffix)
 
 
 def movie_strm_content(base_url: str, movie: Movie) -> str:
@@ -95,13 +137,22 @@ def movie_strm_content(base_url: str, movie: Movie) -> str:
     )
 
 
-def episode_strm_path(root: str, show_name: str, episode: Episode) -> str:
-    show_dir = safe_filename(show_name)
-    filename = "%s - S%02dE%02d - %s (%s).strm" % (
-        show_dir, episode.season, episode.episode,
-        safe_filename(episode.title, "Episode"), episode.id,
-    )
-    return os.path.join(root, show_dir, filename)
+def episode_strm_path(root: str, source: str, show_name: str, episode: Episode) -> str:
+    # The show name is deliberately *not* repeated in the filename - Kodi's TV
+    # scanner already identifies the show from the parent folder, and a real
+    # provider's episode titles were observed already embedding the show name
+    # themselves ("<Show> - S01E02 - <Real Title>"). Repeating it a third time
+    # here (folder, filename prefix, and again inside the title) was the main
+    # contributor to real paths exceeding Windows' MAX_PATH - not just the
+    # contrived worst case, but ordinary shows with a moderately long name.
+    source_dir = safe_filename(source, "Other", max_length=40)
+    show_dir = safe_filename(show_name, max_length=60)
+    prefix = "S%02dE%02d - " % (episode.season, episode.episode)
+    suffix = " (%s).strm" % episode.id
+    budget = _budget_for(root, source_dir, show_dir, prefix, suffix, separators=3)
+    title = safe_filename(episode.title, "Episode", max_length=budget)
+    filename = prefix + title + suffix
+    return os.path.join(root, source_dir, show_dir, filename)
 
 
 def episode_strm_content(base_url: str, episode: Episode) -> str:
@@ -148,26 +199,50 @@ def _prune(root: str, wanted: Dict[str, str]) -> int:
     return removed
 
 
-def sync_movies(root: str, movies: Iterable[Movie], base_url: str) -> Tuple[int, int]:
-    """Returns ``(written, removed)`` file counts."""
+ErrorFn = Callable[[str, Exception], None]
+
+
+def _noop_error(path: str, exc: Exception) -> None:  # pragma: no cover - default
+    pass
+
+
+def sync_movies(root: str, movies: Iterable[Tuple[str, Movie]], base_url: str,
+                 on_error: ErrorFn = _noop_error) -> Tuple[int, int]:
+    """``movies``: (source category name, movie) pairs. Returns ``(written, removed)``."""
     os.makedirs(root, exist_ok=True)
-    wanted = {movie_strm_path(root, movie): movie_strm_content(base_url, movie)
-              for movie in movies}
-    written = sum(1 for path, content in wanted.items() if _write_if_changed(path, content))
+    wanted = {movie_strm_path(root, source, movie): movie_strm_content(base_url, movie)
+              for source, movie in movies}
+    written = 0
+    for path, content in wanted.items():
+        try:
+            if _write_if_changed(path, content):
+                written += 1
+        except OSError as exc:
+            # One bad path (historically: a provider-supplied title long enough
+            # to push the full path past Windows' MAX_PATH even after capping,
+            # or a permissions issue) must not take the rest of a catalogue of
+            # thousands of items down with it.
+            on_error(path, exc)
     removed = _prune(root, wanted)
     return written, removed
 
 
-def sync_episodes(root: str, shows: Iterable[Tuple[str, Iterable[Episode]]],
-                   base_url: str) -> Tuple[int, int]:
-    """``shows``: pairs of (show name, that show's episodes)."""
+def sync_episodes(root: str, shows: Iterable[Tuple[str, str, Iterable[Episode]]],
+                   base_url: str, on_error: ErrorFn = _noop_error) -> Tuple[int, int]:
+    """``shows``: (source category name, show name, that show's episodes) triples."""
     os.makedirs(root, exist_ok=True)
     wanted: Dict[str, str] = {}
-    for show_name, episodes in shows:
+    for source, show_name, episodes in shows:
         for episode in episodes:
-            path = episode_strm_path(root, show_name, episode)
+            path = episode_strm_path(root, source, show_name, episode)
             wanted[path] = episode_strm_content(base_url, episode)
-    written = sum(1 for path, content in wanted.items() if _write_if_changed(path, content))
+    written = 0
+    for path, content in wanted.items():
+        try:
+            if _write_if_changed(path, content):
+                written += 1
+        except OSError as exc:
+            on_error(path, exc)
     removed = _prune(root, wanted)
     return written, removed
 

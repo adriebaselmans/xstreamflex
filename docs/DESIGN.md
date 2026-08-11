@@ -392,13 +392,50 @@ even invoked. No setting found so far changes this.
 scanner, indistinguishable from a folder of real video files some other tool put there — the
 best-trodden path in the whole Kodi ecosystem (every "add to library" video add-on uses it). Each file
 is one line: the `plugin://` URL to open. `sync_library` writes one per movie
-(`<title> (<id>).strm`) and one per episode, nested under a show folder
-(`<show>/<show> - S01E02 - <title> (<id>).strm`) — season/episode numbers in the filename are what
-Kodi's scanner parses for TV shows, no NFO required. Comparing content before rewriting
-(`_write_if_changed`) matters: touching every file's mtime on every sync would make Kodi's own
-*incremental* library scan see the whole catalogue as changed each run instead of only what is
-actually new. `_prune` removes a `.strm` whose title dropped out of the provider or the country
-filter, the same way deleting a downloaded file would.
+(`<source>/<title> (<id>).strm`) and one per episode, nested under a source folder and then a show
+folder (`<source>/<show>/<show> - S01E02 - <title> (<id>).strm`) — season/episode numbers in the
+filename are what Kodi's scanner parses for TV shows, no NFO required. `<source>` is the provider's
+own category name (e.g. `NL | Netflix`), because the provider organizes both movies and series that
+way and a title listed under two sources (Netflix *and* Videoland) should show up under both, not get
+silently collapsed to one — `collect_movies`/`collect_shows_with_episodes` return `(source, item)`
+pairs for exactly this reason, not bare lists.
+
+`safe_filename`'s `max_length`, and `_budget_for`'s per-path length budget computed from the actual
+`root` passed in, exist because a real provider was observed returning an episode `title` that is
+already a fully-formatted `"<Show> - S01E02 - <Real Title>"` string — doubled against this module's
+own prefix, the result exceeded Windows' 260-character `MAX_PATH`, which Windows reports as a bare
+`OSError(2, "No such file or directory")` rather than anything that says "too long". A *fixed*
+per-component cap could not fully guarantee staying under the limit regardless of how long the add-on's
+own profile directory happens to be on a given machine (it was already 100+ characters on the machine
+this was found on), so the budget is computed from `root`'s actual length instead, and the free-text
+component (title) is shrunk down to whatever's left — down to an `_MIN_COMPONENT` floor past which
+shrinking further would make the name meaningless anyway.
+
+`episode_strm_path` deliberately does **not** repeat the show name inside the filename (just
+`S01E02 - <title> (<id>).strm`, not `<show> - S01E02 - <title> (<id>).strm`) — Kodi's TV scanner
+already identifies the show from the parent folder. Real shows on a real account still overflowed the
+budget with the show name repeated: a moderately long show name (50-60 characters, nothing exotic)
+counted three times over — once as the folder, once as the filename prefix, and again baked into the
+title by the same provider quirk described above — was consistently enough on its own to exceed
+`_MAX_PATH` regardless of how aggressively the title itself got truncated. Dropping the redundant
+copy, rather than truncating harder, is what actually fixed the real failures (both now exactly at
+the 240-character budget, having previously been 260+ and 266 characters).
+
+That still cannot mathematically guarantee success if `root` alone plus the fixed parts (folder names,
+the `S01E02` prefix, the `(id).strm` suffix) already exceed the budget — an inherent limit of available
+path length, not something to paper over. The real backstop is that `sync_movies`/`sync_episodes` no
+longer let one bad path take the rest of a catalogue of thousands of items down with it: each write is
+wrapped in its own `try/except OSError`, calling an injectable `on_error(path, exc)` (both callers wire
+it to `context.log("warning", ...)`) and moving on. Before this, a single unwritable path aborted the
+whole sync silently — and since `service.py` only calls `write_sync_state` after a sync fully succeeds,
+a crash left `is_sync_stale` permanently `True`, so the *same* doomed sync retried forever on every
+tick, never getting further than whichever item it died on.
+
+Comparing content before rewriting (`_write_if_changed`) matters: touching every file's mtime on every
+sync would make Kodi's own *incremental* library scan see the whole catalogue as changed each run
+instead of only what is actually new. `_prune` removes a `.strm` whose title (or source, or country
+filter match) is no longer present, the same way deleting a downloaded file would — including, for
+free, cleaning up the flat pre-source-folder layout from before this structure existed.
 
 The user still has to add the resulting local folders (`context.library_dir/movies`,
 `.../series` — shown by `?action=show_paths`) as ordinary Kodi video sources with content type set,

@@ -44,6 +44,10 @@ def _run_library_sync(context: Context) -> None:
         return
 
     country = context.setting("library_country", "NL")
+
+    def on_error(path, exc):
+        context.log("warning", "library sync: skipped %s (%s)" % (path, exc))
+
     try:
         provider, _ = context.provider(config)
         if provider is None:
@@ -51,9 +55,10 @@ def _run_library_sync(context: Context) -> None:
         movies_root = os.path.join(context.library_dir, "movies")
         series_root = os.path.join(context.library_dir, "series")
         movies_written, movies_removed = sync_movies(
-            movies_root, collect_movies(provider, country), context.base_url)
+            movies_root, collect_movies(provider, country), context.base_url, on_error=on_error)
         shows = collect_shows_with_episodes(provider, country)
-        series_written, series_removed = sync_episodes(series_root, shows, context.base_url)
+        series_written, series_removed = sync_episodes(
+            series_root, shows, context.base_url, on_error=on_error)
     except ProviderError as exc:
         context.log("warning", "scheduled library sync failed: %s" % exc.message)
         return

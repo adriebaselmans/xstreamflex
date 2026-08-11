@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="plugin.video.xstreamflex"
        name="XstreamFlex"
-       version="0.2.1"
+       version="0.2.3"
        provider-name="adriebaselmans">
   <requires>
     <import addon="xbmc.python" version="3.0.1"/>
@@ -23,7 +23,19 @@
       <icon>icon.png</icon>
       <fanart>fanart.jpg</fanart>
     </assets>
-    <news>0.2.1 - Keep the library sync from 0.2.0 up to date automatically: service.py now reruns
+    <news>0.2.3 - Fix 0.2.2 not being enough: real show names (not just contrived worst cases)
+were still overflowing the path-length budget, because the show name was repeated three times over
+(the folder, the filename prefix, and again inside the provider's own doubled title). Episode
+filenames no longer repeat the show name - Kodi already gets that from the parent folder - which is
+what actually fixes real series instead of just reducing how often the problem shows up.
+0.2.2 - Fix the library sync crashing on series: one provider returns an episode title
+that already contains "Show - S01E02 - Real Title", and doubled against this add-on's own naming
+that could exceed Windows' path length limit and silently abort the whole sync after only a couple
+of shows (surfacing as Kodi's generic "Something went wrong"). Filenames are now kept within a safe
+length, and one bad title can no longer take the rest of the catalogue down with it - it's skipped
+and logged instead. Also: .strm files are now organized by the provider's own "NL | Source" category
+(Netflix, Videoland, ...) as a folder per source, matching its own structure, instead of one flat pile.
+0.2.1 - Keep the library sync from 0.2.0 up to date automatically: service.py now reruns
 it on the same schedule as the channel export, and triggers Kodi's own library scan afterwards
 (via JSON-RPC, in-process, no webserver needed) so new or removed movies/episodes actually show up
 without any manual steps. New settings: Library > "Keep the Kodi library in sync" and the country

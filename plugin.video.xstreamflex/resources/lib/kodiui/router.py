@@ -368,12 +368,17 @@ def sync_library(context: Context, params) -> None:
         progress.update(40 + int(index * 60 / max(1, total)),
                         "Series: show %d of %d\n%s" % (index, total, name))
 
+    def on_error(path, exc):
+        context.log("warning", "library sync: skipped %s (%s)" % (path, exc))
+
     try:
         all_movies = collect_movies(provider, country, progress=movie_progress)
-        movies_written, movies_removed = sync_movies(movies_root, all_movies, context.base_url)
+        movies_written, movies_removed = sync_movies(
+            movies_root, all_movies, context.base_url, on_error=on_error)
 
         shows = collect_shows_with_episodes(provider, country, progress=series_progress)
-        series_written, series_removed = sync_episodes(series_root, shows, context.base_url)
+        series_written, series_removed = sync_episodes(
+            series_root, shows, context.base_url, on_error=on_error)
     finally:
         progress.close()
 
