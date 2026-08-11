@@ -443,15 +443,27 @@ once. That is the well-trodden, reliable half of this; only the *plugin-source* 
 library feature turned out not to be.
 
 `service.py`'s `_run_library_sync` reruns this on the same schedule as the channel export
-(`export_interval_hours`, gated by `library_sync_enabled`), then calls `xbmc.executeJSONRPC` with
-`VideoLibrary.Scan` for each of the two folders that actually changed — this is Kodi's JSON-RPC
-talking to itself in-process, not over the HTTP webserver (Settings > Services > Control), so it works
-whether or not that's enabled. Without this second step, new/removed `.strm` files would sit on disk
-unreflected until the user (or Kodi's own periodic housekeeping, on whatever schedule that runs on)
-triggers a scan some other way — Kodi's library does not watch the filesystem. Sync state is tracked
-in its own `library-sync-state.json` (`core.library_sync.write_sync_state`/`is_sync_stale`), separate
-from the channel export's `export-state.json`, so a stale-channels vs. stale-library check can never
-be conflated.
+(`export_interval_hours`, gated by `library_sync_enabled`), then triggers Kodi's own scan for each of
+the two folders that actually changed, via `xbmc.executebuiltin('UpdateLibrary("video", "<path>")')`
+— the exact built-in action Kodi's own "Update library" menu item runs. An earlier version called the
+lower-level `VideoLibrary.Scan` JSON-RPC method directly instead: it reported success (no error in the
+response) but the resulting scan aborted after a single item, seconds after this process had just
+finished writing tens of thousands of files — almost certainly a race with Kodi's own directory cache
+that a manual trigger a few minutes later, on the same machine, did not hit. `UpdateLibrary` behaving
+the same as the confirmed-working manual path was worth more than a theoretical reason to prefer the
+JSON-RPC form. Without this step at all, new/removed `.strm` files would sit on disk unreflected until
+the user (or Kodi's own periodic housekeeping, on whatever schedule that runs on) triggers a scan some
+other way — Kodi's library does not watch the filesystem. Sync state is tracked in its own
+`library-sync-state.json` (`core.library_sync.write_sync_state`/`is_sync_stale`), separate from the
+channel export's `export-state.json`, so a stale-channels vs. stale-library check can never be
+conflated.
+
+Scanning a catalogue this size is genuinely slow when an online scraper (TheMovieDB) is attached —
+each item is a real lookup, observed at roughly 40-90ms apiece in the log, so tens of thousands of
+episodes can take a long time and will hit TMDB's rate limits. That is a property of the scraper the
+user chose for the Kodi video source, not of this add-on; a "local information only" source (no
+online matching) would scan near-instantly but without TMDB artwork/metadata. Worth knowing before
+assuming a slow first scan means something is broken.
 
 ## settings.xml
 

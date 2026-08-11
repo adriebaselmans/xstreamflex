@@ -9,8 +9,6 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "lib"))
 
-import json
-
 import xbmc  # noqa: E402
 
 from core.errors import ProviderError  # noqa: E402
@@ -83,17 +81,15 @@ def _run_library_sync(context: Context) -> None:
 
 
 def _scan_library(context: Context, directory: str) -> None:
-    request = {
-        "jsonrpc": "2.0", "id": 1, "method": "VideoLibrary.Scan",
-        "params": {"directory": directory, "showdialogs": False},
-    }
-    response = xbmc.executeJSONRPC(json.dumps(request))
-    try:
-        parsed = json.loads(response)
-    except ValueError:
-        parsed = {}
-    if "error" in parsed:
-        context.log("warning", "library scan of %s failed: %s" % (directory, parsed["error"]))
+    # VideoLibrary.Scan (raw JSON-RPC) was tried first: it "succeeded" (no
+    # error in the response) but the resulting scan aborted after a single
+    # item, seconds after this process had just finished writing tens of
+    # thousands of files - almost certainly a race with Kodi's own directory
+    # cache. UpdateLibrary is the exact built-in action Kodi's own "Update
+    # library" menu item runs, confirmed working manually on the same
+    # machine/timing, so use that instead of a lower-level API that behaves
+    # differently for reasons this add-on does not control.
+    xbmc.executebuiltin('UpdateLibrary("video", "%s")' % directory)
 
 
 def _run_export(context: Context) -> None:
