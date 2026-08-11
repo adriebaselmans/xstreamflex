@@ -395,10 +395,20 @@ is one line: the `plugin://` URL to open. `sync_library` writes one per movie, n
 folder (`<source>/<title> (<id>).strm`), and one per episode, nested under a show folder with **no**
 source folder above it (`<show>/S01E02 - <title> (<id>).strm`) — season/episode numbers in the
 filename are what Kodi's scanner parses for TV shows, no NFO required. `<source>` is the provider's
-own category name (e.g. `NL | Netflix`), because the provider organizes both movies and series that
-way and a title listed under two sources (Netflix *and* Videoland) should show up under both, not get
-silently collapsed to one — `collect_movies`/`collect_shows_with_episodes` return `(source, item)`
-pairs for exactly this reason, not bare lists.
+own category name (e.g. `NL | Netflix`). `collect_movies`/`collect_shows_with_episodes` return
+`(source, item)` pairs, one per category the item appears in, rather than bare lists, because the
+provider's own categories are the only record of which source(s) carry a title.
+
+`sync_movies` then collapses same-`id` pairs back into a single movie: one `.strm`/`.nfo` pair, filed
+under whichever category was encountered first, with **every** matching category folded into the NFO
+as its own `<tag>` (see `movie_nfo_content`). It is the movie's id, not the category name, that decides
+uniqueness on disk — collapsing at the id level, not the (source, id) level, matters because on a real
+account a title showing up under two *genuinely distinct* source apps (Netflix and Videoland) is the
+rare case; showing up under a dozen *overlapping* categories from the same provider (`NL | Nieuw`,
+`NL | Actie`, `NL | Films 2026`, ...) is the common one, and treating the latter as 12 different movies
+produced exactly that many duplicate entries in Kodi's Movies view for what a user sees as one film.
+Filtering/browsing "just this source" still works via Kodi's Tag view — it is just no longer also
+encoded in which folder a movie sits in.
 
 Movies and episodes deliberately use **different** depths for that same source information.
 `movie_strm_path` puts it in the path (`<source>/<title>...`) because Kodi's *movie* scanner walks

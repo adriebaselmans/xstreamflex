@@ -305,16 +305,23 @@ def test_sync_movies_rewrites_a_changed_title(tmp_path):
     assert written == 0, "same content must not be rewritten (would bump mtime)"
 
 
-def test_sync_movies_puts_the_same_title_under_each_source_it_appears_in(tmp_path):
-    """Matches the provider's own structure rather than silently deduplicating:
-    a movie listed under two source apps is available from both."""
+def test_sync_movies_merges_the_same_movie_seen_under_several_categories(tmp_path):
+    """A provider-side id, not the category name, is what makes a movie unique:
+    one .strm/.nfo pair, filed under the first category seen, carrying every
+    matching category as its own <tag> - not one duplicate pair per category
+    (which is exactly what made the same film show up 20+ times for an account
+    whose provider scatters titles across many overlapping VOD categories)."""
     root = str(tmp_path)
     written, removed = sync_movies(
         root, [("NL | Netflix", movie(id="1")), ("NL | Videoland", movie(id="1"))],
         "plugin://plugin.video.xstreamflex/")
-    assert written == 4  # 2 sources x (.strm + .nfo)
+    assert written == 2  # 1 movie x (.strm + .nfo), filed under the first source
     assert os.path.isdir(os.path.join(root, "NL Netflix"))
-    assert os.path.isdir(os.path.join(root, "NL Videoland"))
+    assert not os.path.isdir(os.path.join(root, "NL Videoland"))
+    with open(movie_nfo_path(root, "NL | Netflix", movie(id="1")), encoding="utf-8") as handle:
+        content = handle.read()
+    assert "<tag>NL | Netflix</tag>" in content
+    assert "<tag>NL | Videoland</tag>" in content
 
 
 def test_sync_episodes_nests_directly_by_show_no_source_folder_and_is_idempotent(tmp_path):

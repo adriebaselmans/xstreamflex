@@ -53,9 +53,11 @@ def collect_movies(
     provider, country: str, progress: Optional[ProgressFn] = None
 ) -> List[Tuple[str, Movie]]:
     """Returns ``(source category name, movie)`` pairs - one pair per occurrence,
-    so a movie listed under two sources (e.g. both "NL | Netflix" and
-    "NL | Videoland") appears once per source, matching the provider's own
-    structure instead of silently collapsing it."""
+    so a movie listed under several categories (e.g. both "NL | Netflix" and
+    "NL | Videoland") carries every one of them. ``sync_movies`` is what
+    collapses same-id occurrences back into a single movie with multiple
+    ``<tag>`` entries - not this function, which stays a flat, order-preserving
+    list of everything the provider returned."""
     categories = [c for c in provider.categories(VOD) if matches_country(c.name, country)]
     result: List[Tuple[str, Movie]] = []
     for index, category in enumerate(categories, 1):
@@ -154,7 +156,7 @@ def movie_nfo_path(root: str, source: str, movie: Movie) -> str:
     return strm_path[: -len(".strm")] + ".nfo"
 
 
-def movie_nfo_content(movie: Movie, source: str, headers: Optional[Dict[str, str]] = None) -> str:
+def movie_nfo_content(movie: Movie, sources, headers: Optional[Dict[str, str]] = None) -> str:
     """Self-contained NFO: title/plot/art/tag straight from the provider, no
     online scraper match required. A real account showed many titles the
     provider itself supplies cleanly (e.g. "Aquaman and the Lost Kingdom")
@@ -166,6 +168,13 @@ def movie_nfo_content(movie: Movie, source: str, headers: Optional[Dict[str, str
     category, the equivalent of the per-source folder movies already get,
     without depending on file/folder structure Kodi's scanner might not walk
     (see episode_nfo/show_nfo below for why series can't use a folder for this).
+
+    ``sources`` accepts either a single category name (back-compat) or an
+    iterable of them: a provider's own VOD categories often overlap heavily
+    ("NL | Nieuw", "NL | Actie", "NL | Films 2026", ...), and a title can
+    easily match a dozen of them at once. sync_movies collapses those into
+    one movie with one ``<tag>`` per matching category, rather than a
+    separate duplicate .strm/.nfo pair per category - see its docstring.
     """
     lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', "<movie>"]
     lines.append("  <title>%s</title>" % _xml_escape(movie.name))
@@ -180,7 +189,9 @@ def movie_nfo_content(movie: Movie, source: str, headers: Optional[Dict[str, str
     if movie.icon:
         lines.append('  <thumb aspect="poster">%s</thumb>'
                      % _xml_escape(movie.icon + header_suffix(headers)))
-    lines.append("  <tag>%s</tag>" % _xml_escape(source))
+    source_list = [sources] if isinstance(sources, str) else list(sources)
+    for source in source_list:
+        lines.append("  <tag>%s</tag>" % _xml_escape(source))
     lines.append("</movie>")
     return "\n".join(lines) + "\n"
 
@@ -288,12 +299,29 @@ def _noop_error(path: str, exc: Exception) -> None:  # pragma: no cover - defaul
 def sync_movies(root: str, movies: Iterable[Tuple[str, Movie]], base_url: str,
                  on_error: ErrorFn = _noop_error,
                  headers: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
-    """``movies``: (source category name, movie) pairs. Returns ``(written, removed)``."""
+    """``movies``: (source category name, movie) pairs. Returns ``(written, removed)``.
+
+    A movie appearing under several *category* pairs collapses to a single
+    .strm/.nfo pair, filed under whichever category it was first seen in, with
+    every matching category folded into the NFO as its own ``<tag>``. Without
+    this, a provider that scatters one title across many overlapping VOD
+    categories (as opposed to genuinely distinct source apps like Netflix vs.
+    Videoland) produces that many duplicate entries in Kodi's Movies view for
+    what is really one film - the id, not the category, is what makes a movie
+    unique.
+    """
     os.makedirs(root, exist_ok=True)
-    wanted: Dict[str, str] = {}
+    grouped: Dict[str, Tuple[str, Movie, List[str]]] = {}
     for source, movie in movies:
-        wanted[movie_strm_path(root, source, movie)] = movie_strm_content(base_url, movie)
-        wanted[movie_nfo_path(root, source, movie)] = movie_nfo_content(movie, source, headers)
+        entry = grouped.get(movie.id)
+        if entry is None:
+            grouped[movie.id] = (source, movie, [source])
+        elif source not in entry[2]:
+            entry[2].append(source)
+    wanted: Dict[str, str] = {}
+    for primary_source, movie, sources in grouped.values():
+        wanted[movie_strm_path(root, primary_source, movie)] = movie_strm_content(base_url, movie)
+        wanted[movie_nfo_path(root, primary_source, movie)] = movie_nfo_content(movie, sources, headers)
     written = 0
     for path, content in wanted.items():
         try:
