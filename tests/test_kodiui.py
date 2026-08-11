@@ -83,6 +83,46 @@ def test_categories_are_listed(tmp_path):
     assert "Action" in labels()
 
 
+def test_sync_library_writes_strm_files_for_matching_categories_only(tmp_path):
+    context = make_context(tmp_path, responses={
+        "get_vod_categories": [
+            {"category_id": "9", "category_name": "NL | Filmclub"},
+            {"category_id": "8", "category_name": "BE | Cinemax"},
+        ],
+        "get_vod_streams": load_fixture("vod_streams.json"),
+        "get_series_categories": [],
+    })
+
+    router.dispatch(context, "?action=sync_library&country=NL")
+
+    movies_dir = os.path.join(context.library_dir, "movies")
+    files = [f for f in os.listdir(movies_dir) if f.endswith(".strm")]
+    assert len(files) == 1
+    with open(os.path.join(movies_dir, files[0]), encoding="utf-8") as handle:
+        content = handle.read()
+    assert "action=play_movie" in content and "movie_id=555" in content
+
+
+def test_sync_library_writes_episodes_under_a_show_folder(tmp_path):
+    context = make_context(tmp_path, responses={
+        "get_vod_categories": [],
+        "get_series_categories": [{"category_id": "1", "category_name": "NL | Series"}],
+        "get_series": [{"series_id": 42, "name": "Some Show", "category_id": "1"}],
+        "get_series_info": load_fixture("series_info.json"),
+    })
+
+    router.dispatch(context, "?action=sync_library&country=NL")
+
+    series_dir = os.path.join(context.library_dir, "series")
+    show_dirs = os.listdir(series_dir)
+    assert len(show_dirs) == 1
+    episode_files = [f for f in os.listdir(os.path.join(series_dir, show_dirs[0]))
+                     if f.endswith(".strm")]
+    assert episode_files
+    with open(os.path.join(series_dir, show_dirs[0], episode_files[0]), encoding="utf-8") as handle:
+        assert "action=play_episode" in handle.read()
+
+
 def test_categories_can_be_filtered_by_country_prefix(tmp_path):
     context = make_context(tmp_path, responses={
         "get_vod_categories": [

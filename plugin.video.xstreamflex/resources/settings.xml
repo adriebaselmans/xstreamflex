@@ -35,6 +35,24 @@
       </group>
     </category>
 
+    <category id="library" label="30500">
+      <group id="1">
+        <setting id="library_sync_enabled" type="boolean" label="30501">
+          <level>0</level>
+          <default>true</default>
+          <control type="toggle"/>
+        </setting>
+        <setting id="library_country" type="string" label="30502">
+          <level>0</level>
+          <default>NL</default>
+          <dependencies>
+            <dependency type="enable" setting="library_sync_enabled">true</dependency>
+          </dependencies>
+          <control type="edit" format="string"/>
+        </setting>
+      </group>
+    </category>
+
     <category id="playback" label="30200">
       <group id="1">
         <setting id="preferred_format" type="string" label="30201">

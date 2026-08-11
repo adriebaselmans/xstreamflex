@@ -72,3 +72,15 @@ msgstr ""
 msgctxt "#30404"
 msgid "Debug (logs every request)"
 msgstr ""
+
+msgctxt "#30500"
+msgid "Library"
+msgstr ""
+
+msgctxt "#30501"
+msgid "Keep the Kodi library in sync (.strm files)"
+msgstr ""
+
+msgctxt "#30502"
+msgid "Category prefix to include (e.g. NL)"
+msgstr ""

@@ -72,3 +72,15 @@ msgstr "Normaal"
 msgctxt "#30404"
 msgid "Debug (logs every request)"
 msgstr "Debug (logt elk verzoek)"
+
+msgctxt "#30500"
+msgid "Library"
+msgstr "Bibliotheek"
+
+msgctxt "#30501"
+msgid "Keep the Kodi library in sync (.strm files)"
+msgstr "Kodi-bibliotheek gesynchroniseerd houden (.strm-bestanden)"
+
+msgctxt "#30502"
+msgid "Category prefix to include (e.g. NL)"
+msgstr "Categorievoorvoegsel om op te nemen (bv. NL)"

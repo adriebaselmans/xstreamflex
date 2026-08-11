@@ -40,6 +40,8 @@ class Context:
         os.makedirs(self.profile, exist_ok=True)
         self.export_dir = os.path.join(self.profile, "export")
         os.makedirs(self.export_dir, exist_ok=True)
+        self.library_dir = os.path.join(self.profile, "library")
+        os.makedirs(self.library_dir, exist_ok=True)
 
         self._log_level = self.setting("log_level") or "info"
         self._store: Optional[ProviderStore] = None

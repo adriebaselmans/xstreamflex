@@ -372,6 +372,50 @@ out a failure on the one already in use. Tracked in [ROADMAP.md](ROADMAP.md).
 (`xbmc.InfoTagVideo`), not the removed `setInfo()` dictionary API, and sets `mediatype` so Kodi's
 resume and library behaviour work for VOD.
 
+## core/library_sync.py
+
+```python
+def sync_movies(root, movies, base_url) -> Tuple[int, int]      # (written, removed)
+def sync_episodes(root, shows, base_url) -> Tuple[int, int]     # shows: (name, [Episode]) pairs
+```
+
+Getting an add-on's catalogue into Kodi's native Movies/TV Shows sections is normally a matter of
+Settings > Media > Videos > Add videos, pointed at a `plugin://` URL, with a content type set. That
+*is* documented and does work for many add-ons — it did not work reliably here: `router.sync_library`
+(the `?action=sync_library&country=NL` route, exposed as a menu item) sets content type via the
+in-Kodi flow correctly (confirmed in `MyVideos*.db`'s `path` table), but the actual library scan
+either never triggers or finishes in 5-13ms having walked nothing — confirmed by the complete absence
+of `[plugin.video.xstreamflex]` log lines during or after "Set content", meaning the add-on was never
+even invoked. No setting found so far changes this.
+
+`.strm` files sidestep plugin-source scanning entirely. A folder of them is, to Kodi's library
+scanner, indistinguishable from a folder of real video files some other tool put there — the
+best-trodden path in the whole Kodi ecosystem (every "add to library" video add-on uses it). Each file
+is one line: the `plugin://` URL to open. `sync_library` writes one per movie
+(`<title> (<id>).strm`) and one per episode, nested under a show folder
+(`<show>/<show> - S01E02 - <title> (<id>).strm`) — season/episode numbers in the filename are what
+Kodi's scanner parses for TV shows, no NFO required. Comparing content before rewriting
+(`_write_if_changed`) matters: touching every file's mtime on every sync would make Kodi's own
+*incremental* library scan see the whole catalogue as changed each run instead of only what is
+actually new. `_prune` removes a `.strm` whose title dropped out of the provider or the country
+filter, the same way deleting a downloaded file would.
+
+The user still has to add the resulting local folders (`context.library_dir/movies`,
+`.../series` — shown by `?action=show_paths`) as ordinary Kodi video sources with content type set,
+once. That is the well-trodden, reliable half of this; only the *plugin-source* half of Kodi's
+library feature turned out not to be.
+
+`service.py`'s `_run_library_sync` reruns this on the same schedule as the channel export
+(`export_interval_hours`, gated by `library_sync_enabled`), then calls `xbmc.executeJSONRPC` with
+`VideoLibrary.Scan` for each of the two folders that actually changed — this is Kodi's JSON-RPC
+talking to itself in-process, not over the HTTP webserver (Settings > Services > Control), so it works
+whether or not that's enabled. Without this second step, new/removed `.strm` files would sit on disk
+unreflected until the user (or Kodi's own periodic housekeeping, on whatever schedule that runs on)
+triggers a scan some other way — Kodi's library does not watch the filesystem. Sync state is tracked
+in its own `library-sync-state.json` (`core.library_sync.write_sync_state`/`is_sync_stale`), separate
+from the channel export's `export-state.json`, so a stale-channels vs. stale-library check can never
+be conflated.
+
 ## settings.xml
 
 | Setting | Default | Purpose |
@@ -385,6 +429,8 @@ resume and library behaviour work for VOD.
 | `serialize_requests` | `true` | honour a 1-connection limit |
 | `cache_ttl_multiplier` | `1.0` | debugging aid |
 | `log_level` | `info` | `debug` adds scrubbed request logging |
+| `library_sync_enabled` | `true` | run scheduled `.strm` sync (reuses `export_interval_hours`) |
+| `library_country` | `NL` | category-name prefix `sync_library`/scheduled sync includes |
 
 ## Testing strategy
 

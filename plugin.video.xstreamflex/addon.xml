@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="plugin.video.xstreamflex"
        name="XstreamFlex"
-       version="0.1.9"
+       version="0.2.1"
        provider-name="adriebaselmans">
   <requires>
     <import addon="xbmc.python" version="3.0.1"/>
@@ -23,7 +23,16 @@
       <icon>icon.png</icon>
       <fanart>fanart.jpg</fanart>
     </assets>
-    <news>0.1.9 - Add an optional country filter to category browsing (?country=NL), so Movies/TV
+    <news>0.2.1 - Keep the library sync from 0.2.0 up to date automatically: service.py now reruns
+it on the same schedule as the channel export, and triggers Kodi's own library scan afterwards
+(via JSON-RPC, in-process, no webserver needed) so new or removed movies/episodes actually show up
+without any manual steps. New settings: Library > "Keep the Kodi library in sync" and the country
+prefix to use (default NL).
+0.2.0 - Add a "Sync NL movies &amp; series to Kodi library" menu action: writes .strm files
+into local folders, since pointing a Kodi video source directly at the add-on (0.1.9) turned out
+unreliable - Kodi accepted the content-type setting but never actually scanned it (confirmed: the
+add-on was never invoked). See "Show paths" for the folder locations to add as ordinary Kodi sources.
+0.1.9 - Add an optional country filter to category browsing (?country=NL), so Movies/TV
 Shows can be added as a Kodi video library source that only ever lists categories starting with a
 given country code instead of every category the provider has.
 0.1.8 - Replace the ffmpegdirect reconnect approach (0.1.6/0.1.7) with a local proxy:

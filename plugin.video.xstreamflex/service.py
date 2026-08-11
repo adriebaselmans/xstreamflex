@@ -9,14 +9,86 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "lib"))
 
+import json
+
 import xbmc  # noqa: E402
 
 from core.errors import ProviderError  # noqa: E402
 from core.export.exporter import export_channels, is_stale  # noqa: E402
+from core.library_sync import (  # noqa: E402
+    collect_movies,
+    collect_shows_with_episodes,
+    is_sync_stale,
+    sync_episodes,
+    sync_movies,
+    write_sync_state,
+)
 from core.proxy import ProxyServer  # noqa: E402
 from kodiui.context import Context  # noqa: E402
 
 CHECK_INTERVAL_SECONDS = 300
+
+
+def _run_library_sync(context: Context) -> None:
+    context.reload()
+    config = context.store.active()
+    if config is None or not config.is_complete:
+        return
+
+    interval_hours = max(1, context.setting_int("export_interval_hours", 6))
+    if not is_sync_stale(context.profile, config.id, interval_hours * 3600):
+        return
+
+    if xbmc.Player().isPlaying():
+        context.log("debug", "library sync postponed: playback in progress")
+        return
+
+    country = context.setting("library_country", "NL")
+    try:
+        provider, _ = context.provider(config)
+        if provider is None:
+            return
+        movies_root = os.path.join(context.library_dir, "movies")
+        series_root = os.path.join(context.library_dir, "series")
+        movies_written, movies_removed = sync_movies(
+            movies_root, collect_movies(provider, country), context.base_url)
+        shows = collect_shows_with_episodes(provider, country)
+        series_written, series_removed = sync_episodes(series_root, shows, context.base_url)
+    except ProviderError as exc:
+        context.log("warning", "scheduled library sync failed: %s" % exc.message)
+        return
+    except Exception as exc:
+        context.log("error", "scheduled library sync crashed: %s" % exc)
+        return
+
+    write_sync_state(context.profile, config.id, movies_written=movies_written,
+                     movies_removed=movies_removed, series_written=series_written,
+                     series_removed=series_removed)
+    context.log("info", "scheduled library sync: movies +%d/-%d, series +%d/-%d"
+                % (movies_written, movies_removed, series_written, series_removed))
+
+    # Kodi's own library scanner has to actually run for new/removed .strm files
+    # to be reflected in the Movies/TV Shows sections - it does not watch the
+    # filesystem. xbmc.executeJSONRPC talks to Kodi's JSON-RPC in-process, so
+    # this works whether or not the HTTP webserver (Settings > Services) is on.
+    if movies_written or movies_removed:
+        _scan_library(context, movies_root)
+    if series_written or series_removed:
+        _scan_library(context, series_root)
+
+
+def _scan_library(context: Context, directory: str) -> None:
+    request = {
+        "jsonrpc": "2.0", "id": 1, "method": "VideoLibrary.Scan",
+        "params": {"directory": directory, "showdialogs": False},
+    }
+    response = xbmc.executeJSONRPC(json.dumps(request))
+    try:
+        parsed = json.loads(response)
+    except ValueError:
+        parsed = {}
+    if "error" in parsed:
+        context.log("warning", "library scan of %s failed: %s" % (directory, parsed["error"]))
 
 
 def _run_export(context: Context) -> None:
@@ -71,12 +143,16 @@ def main() -> None:
         # the network stack time to come up on set-top boxes.
         if not monitor.waitForAbort(30):
             _run_export(context)
+            if context.setting_bool("library_sync_enabled", True):
+                _run_library_sync(context)
 
     while not monitor.abortRequested():
         if monitor.waitForAbort(CHECK_INTERVAL_SECONDS):
             break
         if context.setting_bool("export_enabled", True):
             _run_export(context)
+        if context.setting_bool("library_sync_enabled", True):
+            _run_library_sync(context)
 
     proxy.stop()
     context.log("info", "service stopped")

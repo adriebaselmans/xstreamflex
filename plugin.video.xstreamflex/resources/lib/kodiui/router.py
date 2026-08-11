@@ -6,6 +6,7 @@ first.
 """
 from __future__ import annotations
 
+import os
 import traceback
 from typing import Callable, Dict
 from urllib.parse import parse_qsl
@@ -17,6 +18,14 @@ from core.diagnostics import run_diagnostics
 from core.errors import NotSupportedError, ProviderError
 from core.export.exporter import export_channels, last_export_time
 from core.export.iptvsimple import apply_plan, build_plan
+from core.library_sync import (
+    collect_movies,
+    collect_shows_with_episodes,
+    matches_country,
+    sync_episodes,
+    sync_movies,
+    write_sync_state,
+)
 from core.models import SERIES, VOD, Episode
 from . import dialogs, listing, play
 from .context import Context
@@ -113,6 +122,16 @@ def root(context: Context, params) -> None:
         if provider is not None and provider.capabilities.series:
             items.append(listing.folder_item(
                 "Series", _url(context, "categories", kind=SERIES)))
+        if provider is not None and (provider.capabilities.vod or provider.capabilities.series):
+            items.append(listing.folder_item(
+                "Sync NL movies & series to Kodi library", _url(context, "sync_library", country="NL"),
+                plot=("Writes one .strm file per movie/episode into the library folders "
+                      "shown under \"Show paths\". Add those folders as Kodi video sources "
+                      "(content type Movies / TV shows) to get this catalogue into Kodi's "
+                      "own Movies and TV Shows sections - more reliable than pointing a "
+                      "source straight at this add-on, which Kodi's library scanner does "
+                      "not always pick up. Only categories starting with \"NL\" are included."),
+            ))
 
     items.append(listing.folder_item(
         "Providers%s" % (" (%s)" % provider_config.label if provider_config else ""),
@@ -159,21 +178,13 @@ def noop(context: Context, params) -> None:
     listing.finish(context.handle, [])
 
 
-def _matches_country(category_name: str, country: str) -> bool:
-    """Matches the provider's own "NL | Filmclub 2026" naming: the country code
-    at the very start, whatever punctuation follows it (``|``, ``-``, ``:``, a
-    plain space). Case-insensitive since panels are not consistent about it."""
-    name = category_name.strip()
-    return name[:len(country)].casefold() == country.casefold()
-
-
 @route("categories")
 def categories(context: Context, params) -> None:
     kind = params.get("kind", VOD)
     country = params.get("country", "")
     provider, _ = _require_provider(context)
     all_categories = provider.categories(kind)
-    matching = ([c for c in all_categories if _matches_country(c.name, country)]
+    matching = ([c for c in all_categories if matches_country(c.name, country)]
                 if country else all_categories)
     items = [
         listing.folder_item(
@@ -330,6 +341,54 @@ def export(context: Context, params) -> None:
         xbmcplugin.endOfDirectory(context.handle, succeeded=True)
 
 
+@route("sync_library")
+def sync_library(context: Context, params) -> None:
+    """Writes .strm files for VOD/series so a local folder can be added as a
+    Kodi video source. See core/library_sync.py for why: Kodi's own "add a
+    plugin:// URL as a library source" mechanism is unreliable for a catalogue
+    this size, and .strm files sidestep that scanning entirely."""
+    country = params.get("country", "NL")
+    provider, config = _require_provider(context)
+
+    movies_root = os.path.join(context.library_dir, "movies")
+    series_root = os.path.join(context.library_dir, "series")
+
+    progress = xbmcgui.DialogProgress()
+    progress.create("XstreamFlex", "Syncing library…")
+
+    def movie_progress(index, total, name):
+        if progress.iscanceled():
+            raise ProviderError("Library sync cancelled.")
+        progress.update(int(index * 40 / max(1, total)),
+                        "Movies: category %d of %d\n%s" % (index, total, name))
+
+    def series_progress(index, total, name):
+        if progress.iscanceled():
+            raise ProviderError("Library sync cancelled.")
+        progress.update(40 + int(index * 60 / max(1, total)),
+                        "Series: show %d of %d\n%s" % (index, total, name))
+
+    try:
+        all_movies = collect_movies(provider, country, progress=movie_progress)
+        movies_written, movies_removed = sync_movies(movies_root, all_movies, context.base_url)
+
+        shows = collect_shows_with_episodes(provider, country, progress=series_progress)
+        series_written, series_removed = sync_episodes(series_root, shows, context.base_url)
+    finally:
+        progress.close()
+
+    write_sync_state(context.profile, config.id, movies_written=movies_written,
+                     movies_removed=movies_removed, series_written=series_written,
+                     series_removed=series_removed)
+    context.log("info", "library sync: movies +%d/-%d, series +%d/-%d -> %s"
+                % (movies_written, movies_removed, series_written, series_removed,
+                   context.library_dir))
+    dialogs.notify("Movies: +%d/-%d. Series: +%d/-%d."
+                   % (movies_written, movies_removed, series_written, series_removed))
+    if context.handle >= 0:
+        xbmcplugin.endOfDirectory(context.handle, succeeded=True)
+
+
 @route("iptvsimple_setup")
 def iptvsimple_setup(context: Context, params) -> None:
     config = context.store.active()
@@ -367,6 +426,8 @@ def show_paths(context: Context, params) -> None:
     lines = [
         "Profile: %s" % context.profile,
         "Export folder: %s" % context.export_dir,
+        "Library - movies: %s" % os.path.join(context.library_dir, "movies"),
+        "Library - series: %s" % os.path.join(context.library_dir, "series"),
     ]
     if config is not None:
         lines += [

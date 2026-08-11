@@ -14,7 +14,10 @@ XstreamFlex fixes that without giving up Kodi's native Live TV experience:
 - It reads your channel list from the **Xtream API**, category by category, cached on disk.
 - It writes a clean, local **M3U** that IPTV Simple reads instead of contacting your provider.
 - You keep Kodi's full **EPG grid**, channel groups, and PVR features.
-- **VOD and Series** — which IPTV Simple cannot do at all — live in the add-on's own browser.
+- **VOD and Series** — which IPTV Simple cannot do at all — live in the add-on's own browser, and can
+  optionally be synced into Kodi's native **Movies**/**TV Shows** sections too.
+- Playback goes through a small **local proxy** so a provider's transient errors get retried before
+  Kodi's player ever sees them — Kodi's own player gives up after one near-instant retry.
 - A built-in **diagnostics** screen tells you exactly what your provider accepts and refuses.
 
 Target: Kodi 21 "Omega" (`xbmc.python` 3.0.1). Sources: Xtream Codes API and plain M3U/M3U8.
@@ -56,13 +59,18 @@ all for channels — it reads a file on disk that the add-on refreshes on a sche
 
 Not published to a Kodi repository, so installation is from a ZIP you build yourself.
 
+**Setting this up on a new machine (e.g. a fresh Ubuntu + Kodi install)?** See
+[docs/INSTALL.md](docs/INSTALL.md) for the full walkthrough — building the ZIP, installing it, adding
+your provider, Live TV via IPTV Simple, and syncing Movies/Series into Kodi's own library. The
+sections below are the short version.
+
 ### 1. Build the package
 
 ```bash
 git clone https://github.com/adriebaselmans/xstreamflex ~/src/xstreamflex
 cd ~/src/xstreamflex
 python3 tools/package.py
-# -> dist/plugin.video.xstreamflex-0.1.0.zip
+# -> dist/plugin.video.xstreamflex-0.2.1.zip
 ```
 
 The script produces exactly the shape Kodi requires — one top-level folder named after the add-on
@@ -129,6 +137,7 @@ one first. If your account allows more, raise the limit in the provider settings
 
 ## Documentation
 
+- [docs/INSTALL.md](docs/INSTALL.md) — full setup walkthrough for a new machine
 - [docs/DESIGN.md](docs/DESIGN.md) — module-by-module design and data flow
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layering rules and why the core is Kodi-free
 - [docs/PROVIDER-FINDINGS.md](docs/PROVIDER-FINDINGS.md) — the measurements this project is built on
