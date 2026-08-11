@@ -155,6 +155,7 @@ class Movie:
             rating=_float(item.get("rating")),
             plot=_str(item.get("plot")),
             year=_int(item.get("year")),
+            genre=_str(item.get("genre")),
             direct_source=_str(item.get("direct_source")),
         )
 
