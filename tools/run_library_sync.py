@@ -40,7 +40,6 @@ def main() -> int:
     args = parser.parse_args()
 
     store = ProviderStore(os.path.join(args.profile, "providers.json"))
-    store.load()
     config = store.active()
     if config is None or not config.is_complete:
         print("No complete active provider found in %s" % args.profile)
@@ -48,7 +47,8 @@ def main() -> int:
     print("Syncing against: %s" % config.describe())
 
     log = lambda level, message: print("[%s] %s" % (level, message))  # noqa: E731
-    client = HttpClient(config.user_agent, secrets=config.secrets, logger=log)
+    client = HttpClient(config.user_agent, secrets=config.secrets, logger=log,
+                        referer=config.referer, verify_tls=config.verify_tls)
     provider = XtreamProvider(config, client, NullCache(), log)
     headers = {"User-Agent": config.user_agent} if config.user_agent else {}
     if config.referer:
