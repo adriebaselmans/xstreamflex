@@ -125,3 +125,98 @@ def test_unexpected_error_does_not_kill_the_service(service, tmp_path):
     service._run_export(context)
 
     assert any("crashed" in message for _, message in kodistubs.log_lines)
+
+
+class FakeMonitor:
+    """xbmc.Monitor whose waits are scripted.
+
+    The shared stub aborts on the first wait so that main() exits; the clean has
+    to be able to wait more than once, and to see a scan finish while it does.
+    """
+
+    def __init__(self, abort_on_call=None, stop_scanning_after=None):
+        self.calls = 0
+        self.abort_on_call = abort_on_call
+        self.stop_scanning_after = stop_scanning_after
+
+    def waitForAbort(self, timeout=0):
+        self.calls += 1
+        if self.stop_scanning_after is not None and self.calls >= self.stop_scanning_after:
+            kodistubs.conditions["Library.IsScanningVideo"] = False
+        return self.abort_on_call is not None and self.calls >= self.abort_on_call
+
+    def abortRequested(self):
+        return False
+
+
+def cleans():
+    return [command for command in kodistubs.builtins if command.startswith("CleanLibrary")]
+
+
+def test_clean_runs_when_no_scan_is_in_progress(service):
+    context = Context()
+
+    service._clean_library(context, FakeMonitor())
+
+    assert cleans() == ['CleanLibrary("video", false)']
+
+
+def test_clean_waits_for_a_running_scan_to_finish(service):
+    context = Context()
+    kodistubs.conditions["Library.IsScanningVideo"] = True
+
+    monitor = FakeMonitor(stop_scanning_after=4)
+    service._clean_library(context, monitor)
+
+    assert cleans() == ['CleanLibrary("video", false)']
+    assert monitor.calls >= 4, "should have waited rather than cleaned immediately"
+
+
+def test_clean_gives_up_on_a_scan_that_never_ends(service):
+    """A stuck scan must not pin the service thread indefinitely."""
+    context = Context()
+    kodistubs.conditions["Library.IsScanningVideo"] = True
+
+    service._clean_library(context, FakeMonitor())
+
+    assert cleans() == []
+    assert any("library clean skipped" in message for _, message in kodistubs.log_lines)
+
+
+def test_clean_stops_when_kodi_is_shutting_down(service):
+    context = Context()
+    kodistubs.conditions["Library.IsScanningVideo"] = True
+
+    service._clean_library(context, FakeMonitor(abort_on_call=2))
+
+    assert cleans() == []
+
+
+def _stub_sync(service, monkeypatch, movies, series):
+    monkeypatch.setattr(service, "is_sync_stale", lambda *a, **k: True)
+    monkeypatch.setattr(service, "collect_movies", lambda *a, **k: [])
+    monkeypatch.setattr(service, "collect_shows_with_episodes", lambda *a, **k: [])
+    monkeypatch.setattr(service, "sync_movies", lambda *a, **k: movies)
+    monkeypatch.setattr(service, "sync_episodes", lambda *a, **k: series)
+    monkeypatch.setattr(service, "write_sync_state", lambda *a, **k: None)
+
+
+def test_removed_titles_trigger_a_clean(service, monkeypatch):
+    """UpdateLibrary only adds, so a removal that is not cleaned stays visible."""
+    context, _ = context_with_provider()
+    _stub_sync(service, monkeypatch, movies=(0, 1), series=(0, 0))
+
+    service._run_library_sync(context, FakeMonitor())
+
+    assert cleans() == ['CleanLibrary("video", false)']
+
+
+def test_additions_alone_do_not_trigger_a_clean(service, monkeypatch):
+    """Cleaning walks the whole video library; it is not free."""
+    context, _ = context_with_provider()
+    _stub_sync(service, monkeypatch, movies=(3, 0), series=(2, 0))
+
+    service._run_library_sync(context, FakeMonitor())
+
+    assert cleans() == []
+    assert any(command.startswith("UpdateLibrary") for command in kodistubs.builtins)
