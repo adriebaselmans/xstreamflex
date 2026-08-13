@@ -20,10 +20,18 @@ directory_items = []
 resolved = []
 notifications = []
 textviewers = []
+builtins = []
+
+#: Boolean conditions xbmc.getCondVisibility should report as true. Anything not
+#: named here is false, which matches Kodi for conditions about state that is not
+#: currently happening.
+conditions = {}
 
 
 def reset():
     del log_lines[:], directory_items[:], resolved[:], notifications[:], textviewers[:]
+    del builtins[:]
+    conditions.clear()
 
 
 #: Setters that genuinely exist on xbmc.InfoTagVideo in Kodi 20/21, taken from
@@ -186,7 +194,8 @@ def install():
     xbmc.log = lambda message, level=LOGINFO: log_lines.append((level, message))
     xbmc.Player = Player
     xbmc.Monitor = Monitor
-    xbmc.executebuiltin = lambda command, wait=False: None
+    xbmc.executebuiltin = lambda command, wait=False: builtins.append(command)
+    xbmc.getCondVisibility = lambda condition: bool(conditions.get(condition, False))
     xbmc.sleep = lambda ms: None
 
     xbmcgui = types.ModuleType("xbmcgui")

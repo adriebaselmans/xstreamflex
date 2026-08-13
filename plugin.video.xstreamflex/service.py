@@ -26,8 +26,15 @@ from kodiui.context import Context  # noqa: E402
 
 CHECK_INTERVAL_SECONDS = 300
 
+# How long a clean will wait for the scan queued before it. A first scan of a
+# catalogue this size runs for minutes, so the wait has to be generous; past that
+# the scan is stuck rather than slow, and the clean is better skipped than left
+# blocking the service thread until the next tick would have fired anyway.
+CLEAN_SCAN_WAIT_SECONDS = 600
+CLEAN_SCAN_POLL_SECONDS = 5
 
-def _run_library_sync(context: Context) -> None:
+
+def _run_library_sync(context: Context, monitor: xbmc.Monitor) -> None:
     context.reload()
     config = context.store.active()
     if config is None or not config.is_complete:
@@ -86,6 +93,8 @@ def _run_library_sync(context: Context) -> None:
         _scan_library(context, movies_root)
     if series_written or series_removed:
         _scan_library(context, series_root)
+    if movies_removed or series_removed:
+        _clean_library(context, monitor)
 
 
 def _scan_library(context: Context, directory: str) -> None:
@@ -98,6 +107,38 @@ def _scan_library(context: Context, directory: str) -> None:
     # machine/timing, so use that instead of a lower-level API that behaves
     # differently for reasons this add-on does not control.
     xbmc.executebuiltin('UpdateLibrary("video", "%s")' % directory)
+
+
+def _clean_library(context: Context, monitor: xbmc.Monitor) -> None:
+    """Drop library entries whose .strm the sync just deleted.
+
+    UpdateLibrary only ever adds. A title the provider stopped carrying keeps its
+    row in Movies/TV Shows, pointing at a file that is no longer there, and only a
+    clean removes it. Kodi ignores a clean while a video scan is running, and the
+    scan queued just above is asynchronous, so wait for it - bounded, and via the
+    monitor, because this is the service thread and an abort still has to win.
+    """
+    # executebuiltin queues the scan rather than running it, so Library.IsScanningVideo
+    # is still false for a moment afterwards. Waiting one poll first stops that gap
+    # being read as "the scan already finished".
+    if monitor.waitForAbort(CLEAN_SCAN_POLL_SECONDS):
+        return
+
+    waited = CLEAN_SCAN_POLL_SECONDS
+    while xbmc.getCondVisibility("Library.IsScanningVideo"):
+        if waited >= CLEAN_SCAN_WAIT_SECONDS:
+            context.log("warning", "library clean skipped: video scan still running "
+                                   "after %d seconds" % waited)
+            return
+        if monitor.waitForAbort(CLEAN_SCAN_POLL_SECONDS):
+            return
+        waited += CLEAN_SCAN_POLL_SECONDS
+
+    # showdialogs=false: nothing about this is user-initiated, and a modal progress
+    # dialog over whatever is playing would be the only visible sign of a sync that
+    # is otherwise meant to go unnoticed.
+    xbmc.executebuiltin('CleanLibrary("video", false)')
+    context.log("info", "library clean requested")
 
 
 def _run_export(context: Context) -> None:
@@ -153,7 +194,7 @@ def main() -> None:
         if not monitor.waitForAbort(30):
             _run_export(context)
             if context.setting_bool("library_sync_enabled", True):
-                _run_library_sync(context)
+                _run_library_sync(context, monitor)
 
     while not monitor.abortRequested():
         if monitor.waitForAbort(CHECK_INTERVAL_SECONDS):
@@ -161,7 +202,7 @@ def main() -> None:
         if context.setting_bool("export_enabled", True):
             _run_export(context)
         if context.setting_bool("library_sync_enabled", True):
-            _run_library_sync(context)
+            _run_library_sync(context, monitor)
 
     proxy.stop()
     context.log("info", "service stopped")
