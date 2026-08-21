@@ -383,3 +383,34 @@ def test_sync_state_is_per_provider(tmp_path):
     write_sync_state(state_dir, "p1", movies_written=1, movies_removed=0,
                       series_written=0, series_removed=0)
     assert last_sync_time(state_dir, "p2") == 0
+
+
+def test_unencodable_path_skips_one_item_not_the_whole_sync(tmp_path, monkeypatch):
+    """Steam exports LC_ALL=C to everything it launches, so Kodi started from a
+    Steam shortcut has an ASCII filesystem encoding and every accented title
+    raises UnicodeEncodeError. That must skip the title, not abort the sync."""
+    import core.library_sync as ls
+
+    real_write = ls._write_if_changed
+    calls = []
+
+    def flaky(path, content):
+        if "Amelie" in path:
+            raise UnicodeEncodeError("ascii", "é", 0, 1, "ordinal not in range(128)")
+        return real_write(path, content)
+
+    monkeypatch.setattr(ls, "_write_if_changed", flaky)
+
+    root = str(tmp_path / "movies")
+    movies = [
+        (("NL | ACTIE", movie(id="1", name="Amelie")),),
+        (("NL | ACTIE", movie(id="2", name="Plain Title")),),
+    ]
+    flat = [pair for group in movies for pair in group]
+
+    written, _ = ls.sync_movies(root, flat, "http://base",
+                                on_error=lambda p, e: calls.append(p))
+
+    assert written > 0, "the encodable title must still be written"
+    assert calls, "the failing path must be reported through on_error"
+    assert all("Amelie" in path for path in calls)
