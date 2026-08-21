@@ -127,3 +127,77 @@ def test_starts_with_extm3u(tmp_path):
     out = str(tmp_path / "j.m3u")
     write_m3u(out, [], lambda c: "", user_agent="UA")
     assert read(out) == "#EXTM3U\n"
+
+
+# -- country filtering in export_channels ------------------------------------
+
+class _FakeProvider:
+    """Minimal stand-in for the Xtream provider: only iter_channels is used."""
+
+    kind = "xtream"
+
+    def __init__(self, channels):
+        self._channels = channels
+
+    def iter_channels(self, progress=None):
+        return iter(self._channels)
+
+    def live_url(self, channel_id):
+        return "http://host/live/u/p/%s.ts" % channel_id
+
+
+def _config():
+    from core.config import ProviderConfig
+    return ProviderConfig(label="T", base_url="http://host:8080",
+                          username="u", password="p")
+
+
+def _panel():
+    """A slice shaped like the real panel: mostly foreign, a few Dutch groups,
+    including the provider's inconsistent double-space spelling."""
+    return [
+        channel(id="1", name="NPO 1", group="NL | NEDERLAND ALL"),
+        channel(id="2", name="Apple film", group="NL  | APPLE TV+ FILMS"),
+        channel(id="3", name="CNN", group="US | USA"),
+        channel(id="4", name="Sport1", group="DE | SPORTDEUTSCHLAND TV"),
+        channel(id="5", name="NLD kanaal", group="NLD | NOT DUTCH"),
+    ]
+
+
+def test_country_filter_keeps_only_matching_groups(tmp_path):
+    from core.export.exporter import export_channels
+
+    out = str(tmp_path / "channels.m3u")
+    result = export_channels(_FakeProvider(_panel()), _config(), out, country="NL")
+
+    text = read(out)
+    assert result.channel_count == 2, "only the two NL groups should survive"
+    assert "NPO 1" in text and "Apple film" in text
+    assert "CNN" not in text and "Sport1" not in text
+    # "NLD" starts with the same letters but is a different country.
+    assert "NLD kanaal" not in text
+
+
+def test_no_country_means_everything(tmp_path):
+    """The "all countries" menu entry passes an empty country."""
+    from core.export.exporter import export_channels
+
+    out = str(tmp_path / "channels.m3u")
+    result = export_channels(_FakeProvider(_panel()), _config(), out, country="")
+
+    assert result.channel_count == 5
+
+
+def test_country_filter_falls_back_to_category_id(tmp_path):
+    """Channels whose group is empty still carry the category name."""
+    from core.export.exporter import export_channels
+
+    out = str(tmp_path / "channels.m3u")
+    channels = [
+        channel(id="1", name="Keep", group="", category_id="NL | RADIO"),
+        channel(id="2", name="Drop", group="", category_id="US | USA"),
+    ]
+    result = export_channels(_FakeProvider(channels), _config(), out, country="NL")
+
+    assert result.channel_count == 1
+    assert "Keep" in read(out)

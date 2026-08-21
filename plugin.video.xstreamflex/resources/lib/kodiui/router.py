@@ -153,10 +153,20 @@ def livetv(context: Context, params) -> None:
     path = context.playlist_path(provider_config)
     exported = last_export_time(context.export_dir, provider_config.id)
 
+    country = context.setting("library_country", "NL")
+    if country:
+        rebuild_label = "Rebuild channel list now (%s only)" % country
+        rebuild_plot = ("Fetch the provider's %s categories and rewrite %s. "
+                        "Filtering keeps the EPG small enough for Kodi to stay "
+                        "responsive." % (country, path))
+    else:
+        rebuild_label = "Rebuild channel list now"
+        rebuild_plot = "Fetch every category from the provider and rewrite %s" % path
+
     items = [
         listing.folder_item(
-            "Rebuild channel list now", _url(context, "export"),
-            plot="Fetch every category from the provider and rewrite %s" % path,
+            rebuild_label, _url(context, "export"),
+            plot=rebuild_plot,
         ),
         listing.folder_item(
             "Set up IPTV Simple", _url(context, "iptvsimple_setup"),
@@ -167,6 +177,15 @@ def livetv(context: Context, params) -> None:
             plot=path,
         ),
     ]
+    if country:
+        # Escape hatch: the country filter is the sensible default, but the whole
+        # panel has to stay reachable without editing settings first.
+        items.insert(1, listing.folder_item(
+            "Rebuild channel list now (all countries)",
+            _url(context, "export", all_countries="1"),
+            plot="Every category the provider offers. Expect a much larger EPG "
+                 "and a slower Kodi.",
+        ))
     if exported:
         items.insert(0, listing.folder_item(
             "Last export: %s" % _ago(exported), _url(context, "noop"), plot=path))
@@ -318,6 +337,14 @@ def export(context: Context, params) -> None:
     provider, config = _require_provider(context)
     path = context.playlist_path(config)
 
+    # The menu offers both a filtered and an unfiltered rebuild; the parameter is
+    # what distinguishes them, so an explicit "all countries" run does not have to
+    # touch the setting the scheduled export also reads.
+    if params.get("all_countries") == "1":
+        country = ""
+    else:
+        country = context.setting("library_country", "NL")
+
     progress = xbmcgui.DialogProgress()
     progress.create("XstreamFlex", "Fetching channels…")
 
@@ -328,7 +355,8 @@ def export(context: Context, params) -> None:
                         "Category %d of %d\n%s" % (index, total, name))
 
     try:
-        result = export_channels(provider, config, path, progress=report)
+        result = export_channels(provider, config, path, progress=report,
+                                 country=country)
     finally:
         progress.close()
 
