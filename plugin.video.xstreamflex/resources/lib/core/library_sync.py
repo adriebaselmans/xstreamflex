@@ -327,11 +327,19 @@ def sync_movies(root: str, movies: Iterable[Tuple[str, Movie]], base_url: str,
         try:
             if _write_if_changed(path, content):
                 written += 1
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             # One bad path (historically: a provider-supplied title long enough
             # to push the full path past Windows' MAX_PATH even after capping,
             # or a permissions issue) must not take the rest of a catalogue of
             # thousands of items down with it.
+            #
+            # UnicodeError is not an OSError, so it used to escape this guard and
+            # abort the whole sync. It happens whenever Python's filesystem
+            # encoding is ASCII and a title contains anything outside it - which
+            # is not exotic: Steam exports LC_ALL=C to everything it launches, so
+            # Kodi started from a Steam shortcut hits this on the first accented
+            # film title. Fixing the locale is the real cure; surviving it is
+            # this loop's job.
             on_error(path, exc)
     removed = _prune(root, wanted)
     return written, removed
@@ -353,7 +361,9 @@ def sync_episodes(root: str, shows: Iterable[Tuple[str, Series, Iterable[Episode
         try:
             if _write_if_changed(path, content):
                 written += 1
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
+            # Same reasoning as sync_movies: an un-encodable path is a skipped
+            # episode, not a failed sync.
             on_error(path, exc)
     removed = _prune(root, wanted)
     return written, removed
