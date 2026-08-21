@@ -14,6 +14,7 @@ from typing import Callable, Optional
 
 from ..config import KIND_XTREAM, ProviderConfig
 from ..errors import ConnectionLimitError
+from ..library_sync import matches_country
 from ..models import ExportResult
 from .m3u_writer import write_m3u
 
@@ -65,8 +66,21 @@ def export_channels(
     *,
     progress: Optional[ProgressFn] = None,
     renumber: bool = False,
+    country: str = "",
 ) -> ExportResult:
-    """Fetch the live channel list and write it as an M3U for IPTV Simple."""
+    """Fetch the live channel list and write it as an M3U for IPTV Simple.
+
+    ``country`` filters channels to the groups whose name starts with that code
+    ("NL | Cinema"), using the same matcher the VOD/series library sync applies
+    to its categories - so both halves of the addon agree on what "NL" means,
+    including the provider's inconsistent spacing ("NL  | Apple TV+").
+
+    This matters more than it looks: a full panel here is ~11.8k channels in 262
+    groups, of which 21 groups (~570 channels) are Dutch. Handing all of them to
+    IPTV Simple means Kodi builds an EPG over every one of them, which is slow
+    enough to make the whole UI unresponsive. Empty string means no filtering,
+    which is what the "all countries" menu entry passes.
+    """
     if config.kind == KIND_XTREAM:
         url_for = lambda channel: provider.live_url(channel.id)  # noqa: E731
     else:
@@ -75,6 +89,11 @@ def export_channels(
     directory = os.path.dirname(os.path.abspath(out_path))
     with export_lock(directory):
         channels = provider.iter_channels(progress=progress)
+        if country:
+            channels = (
+                channel for channel in channels
+                if matches_country(channel.group or channel.category_id, country)
+            )
         result = write_m3u(
             out_path,
             channels,

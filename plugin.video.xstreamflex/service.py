@@ -165,7 +165,11 @@ def _run_export(context: Context) -> None:
         provider, _ = context.provider(config)
         if provider is None:
             return
-        result = export_channels(provider, config, path)
+        # Same country filter the menu's default rebuild uses: without it the
+        # scheduled run would quietly restore the full ~11.8k-channel playlist
+        # a few hours after someone deliberately narrowed it.
+        result = export_channels(provider, config, path,
+                                 country=context.setting("library_country", "NL"))
     except ProviderError as exc:
         context.log("warning", "scheduled export failed: %s" % exc.message)
         return
