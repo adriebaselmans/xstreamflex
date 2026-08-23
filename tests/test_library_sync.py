@@ -440,3 +440,48 @@ def test_sync_episodes_writes_an_nfo_beside_every_episode(tmp_path):
     assert "<season>2</season>" in content
     assert "<episode>7</episode>" in content
     assert "<title>Ep Title</title>" in content
+
+
+def test_write_sync_state_is_atomic_and_survives_a_concurrent_writer(tmp_path):
+    """A torn state file reads back as "never synced", which triggers a full
+    sync on every single startup - the bug that made this feel broken for
+    days. The write must be all-or-nothing.
+    """
+    from core.library_sync import last_sync_time, write_sync_state
+
+    state_dir = str(tmp_path)
+    for i in range(20):
+        write_sync_state(state_dir, "prov", movies_written=i, movies_removed=0,
+                         series_written=i, series_removed=0)
+        assert last_sync_time(state_dir, "prov") > 0, "state must always parse"
+
+    # No temp files left behind.
+    assert not [p for p in os.listdir(state_dir) if p.endswith(".tmp")]
+
+
+def test_sync_lock_refuses_a_second_holder(tmp_path):
+    """Two concurrent syncs did the same 110k writes twice and raced on the
+    state file - observed live, both finishing in the same second."""
+    from core.library_sync import sync_lock
+
+    state_dir = str(tmp_path)
+    with sync_lock(state_dir) as first:
+        assert first is True
+        with sync_lock(state_dir) as second:
+            assert second is False, "a second sync must not start"
+
+    # Released again afterwards.
+    with sync_lock(state_dir) as third:
+        assert third is True
+
+
+def test_sync_request_is_consumed_exactly_once(tmp_path):
+    """Removed before the sync runs, not after: a request that crashes the
+    sync must not be retried forever."""
+    from core.library_sync import request_sync, take_sync_request
+
+    state_dir = str(tmp_path)
+    assert take_sync_request(state_dir) is False
+    request_sync(state_dir)
+    assert take_sync_request(state_dir) is True
+    assert take_sync_request(state_dir) is False

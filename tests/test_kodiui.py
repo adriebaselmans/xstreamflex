@@ -83,7 +83,47 @@ def test_categories_are_listed(tmp_path):
     assert "Action" in labels()
 
 
-def test_sync_library_writes_strm_files_for_matching_categories_only(tmp_path):
+def test_sync_library_hands_off_to_the_service_instead_of_blocking(tmp_path):
+    """The route must not do the sync itself.
+
+    A sync of a real catalogue runs for minutes, and Kodi resolves a plugin://
+    directory listing under a timeout while showing a modal busy spinner. Live
+    that ended in "GetDirectory - Error getting plugin://...?action=sync_library"
+    and a spinner in the Videos window that no button dismissed - the add-on
+    looked hung while Kodi itself was idle and answering JSONRPC.Ping.
+    """
+    from core.library_sync import take_sync_request
+
+    context = make_context(tmp_path, responses={
+        "get_vod_categories": [{"category_id": "9", "category_name": "NL | Filmclub"}],
+        "get_vod_streams": load_fixture("vod_streams.json"),
+        "get_series_categories": [],
+    })
+
+    router.dispatch(context, "?action=sync_library&country=NL")
+
+    assert take_sync_request(context.profile), "service must be asked to sync"
+    assert not os.path.isdir(os.path.join(context.library_dir, "movies")), \
+        "the route must not write the library itself"
+
+
+def test_sync_library_reports_rather_than_queues_while_a_sync_runs(tmp_path):
+    from core.library_sync import sync_lock, take_sync_request
+
+    context = make_context(tmp_path, responses={"get_vod_categories": [],
+                                                "get_series_categories": []})
+    with sync_lock(context.profile) as acquired:
+        assert acquired
+        router.dispatch(context, "?action=sync_library&country=NL")
+
+    assert not take_sync_request(context.profile), \
+        "a second request must not stack up behind the running sync"
+
+
+def test_collect_movies_keeps_only_the_requested_country(tmp_path):
+    """Moved down from the route test: the filtering lives here now."""
+    from core.library_sync import collect_movies, sync_movies
+
     context = make_context(tmp_path, responses={
         "get_vod_categories": [
             {"category_id": "9", "category_name": "NL | Filmclub"},
@@ -92,31 +132,36 @@ def test_sync_library_writes_strm_files_for_matching_categories_only(tmp_path):
         "get_vod_streams": load_fixture("vod_streams.json"),
         "get_series_categories": [],
     })
-
-    router.dispatch(context, "?action=sync_library&country=NL")
+    provider, _ = context.provider()
 
     movies_dir = os.path.join(context.library_dir, "movies")
+    sync_movies(movies_dir, collect_movies(provider, "NL"), context.base_url)
+
     assert os.path.isdir(os.path.join(movies_dir, "NL Filmclub"))
     strm_files = [os.path.join(dirpath, name)
-                 for dirpath, _dirs, names in os.walk(movies_dir)
-                 for name in names if name.endswith(".strm")]
+                  for dirpath, _dirs, names in os.walk(movies_dir)
+                  for name in names if name.endswith(".strm")]
     assert len(strm_files) == 1
     with open(strm_files[0], encoding="utf-8") as handle:
         content = handle.read()
     assert "action=play_movie" in content and "movie_id=555" in content
 
 
-def test_sync_library_writes_episodes_under_a_show_folder(tmp_path):
+def test_collect_shows_writes_episodes_under_a_show_folder(tmp_path):
+    from core.library_sync import collect_shows_with_episodes, sync_episodes
+
     context = make_context(tmp_path, responses={
         "get_vod_categories": [],
         "get_series_categories": [{"category_id": "1", "category_name": "NL | Series"}],
         "get_series": [{"series_id": 42, "name": "Some Show", "category_id": "1"}],
         "get_series_info": load_fixture("series_info.json"),
     })
-
-    router.dispatch(context, "?action=sync_library&country=NL")
+    provider, _ = context.provider()
 
     series_dir = os.path.join(context.library_dir, "series")
+    sync_episodes(series_dir, collect_shows_with_episodes(provider, "NL"),
+                  context.base_url)
+
     assert os.path.isdir(os.path.join(series_dir, "Some Show"))
     episode_files = [os.path.join(dirpath, name)
                      for dirpath, _dirs, names in os.walk(series_dir)
