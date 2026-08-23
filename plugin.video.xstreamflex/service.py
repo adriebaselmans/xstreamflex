@@ -14,6 +14,7 @@ import xbmc  # noqa: E402
 from core.errors import ProviderError  # noqa: E402
 from core.export.exporter import export_channels, is_stale  # noqa: E402
 from core.library_sync import (  # noqa: E402
+    collect_movie_details,
     collect_movies,
     collect_shows_with_episodes,
     is_sync_stale,
@@ -87,9 +88,11 @@ def _sync_and_scan(context: Context, monitor: xbmc.Monitor, config, country,
             return
         movies_root = os.path.join(context.library_dir, "movies")
         series_root = os.path.join(context.library_dir, "series")
+        all_movies = collect_movies(provider, country)
         movies_written, movies_removed = sync_movies(
-            movies_root, collect_movies(provider, country), context.base_url,
-            on_error=on_error, headers=headers)
+            movies_root, all_movies, context.base_url,
+            on_error=on_error, headers=headers,
+            details=collect_movie_details(provider, all_movies))
         shows = collect_shows_with_episodes(provider, country)
         series_written, series_removed = sync_episodes(
             series_root, shows, context.base_url, on_error=on_error, headers=headers)

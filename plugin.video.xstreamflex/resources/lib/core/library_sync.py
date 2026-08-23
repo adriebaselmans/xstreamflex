@@ -69,6 +69,43 @@ def collect_movies(
     return result
 
 
+def collect_movie_details(provider, movies: Iterable[Tuple[str, Movie]],
+                           progress: Optional[ProgressFn] = None) -> Dict[str, dict]:
+    """One ``get_vod_info`` call per movie, keyed by movie id.
+
+    The VOD *list* endpoint is far thinner than it looks: it carries name,
+    rating, icon and a tmdb id, and that is all - no plot, no year, no genre,
+    no runtime. Everything that makes a library entry worth browsing (and
+    ``<premiered>``, without which Kodi cannot offer "Release date" as a sort
+    order at all) lives only behind the per-movie detail call.
+
+    Measured at ~0.13s per movie against a real account, so roughly 12 minutes
+    for a 5.5k catalogue on a cold cache and near-instant afterwards. That is
+    the same shape as collect_shows_with_episodes, which already pays one call
+    per show, and it runs on the service thread where nothing is waiting on it.
+
+    A failure for one movie is skipped, not fatal: a thinner NFO is better than
+    no library.
+    """
+    seen: Dict[str, dict] = {}
+    unique = []
+    for _source, movie in movies:
+        if movie.id not in seen:
+            seen[movie.id] = {}
+            unique.append(movie)
+    for index, movie in enumerate(unique, 1):
+        if progress:
+            progress(index, len(unique), movie.name)
+        try:
+            info = provider.movie_info(movie.id) or {}
+        except Exception:
+            continue
+        details = info.get("info") if isinstance(info, dict) else None
+        if isinstance(details, dict):
+            seen[movie.id] = details
+    return seen
+
+
 def collect_shows_with_episodes(
     provider, country: str, progress: Optional[ProgressFn] = None
 ) -> List[Tuple[str, Series, List[Episode]]]:
@@ -158,7 +195,8 @@ def movie_nfo_path(root: str, source: str, movie: Movie) -> str:
     return strm_path[: -len(".strm")] + ".nfo"
 
 
-def movie_nfo_content(movie: Movie, sources, headers: Optional[Dict[str, str]] = None) -> str:
+def movie_nfo_content(movie: Movie, sources, headers: Optional[Dict[str, str]] = None,
+                       details: Optional[dict] = None) -> str:
     """Self-contained NFO: title/plot/art/tag straight from the provider, no
     online scraper match required. A real account showed many titles the
     provider itself supplies cleanly (e.g. "Aquaman and the Lost Kingdom")
@@ -178,19 +216,92 @@ def movie_nfo_content(movie: Movie, sources, headers: Optional[Dict[str, str]] =
     one movie with one ``<tag>`` per matching category, rather than a
     separate duplicate .strm/.nfo pair per category - see its docstring.
     """
+    d = details or {}
+
+    def value(*keys):
+        for key in keys:
+            got = d.get(key)
+            if got not in (None, "", 0, "0", []):
+                return got
+        return None
+
     lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', "<movie>"]
     lines.append("  <title>%s</title>" % _xml_escape(movie.name))
-    if movie.plot:
-        lines.append("  <plot>%s</plot>" % _xml_escape(movie.plot))
-    if movie.year:
-        lines.append("  <year>%d</year>" % movie.year)
-    if movie.genre:
-        lines.append("  <genre>%s</genre>" % _xml_escape(movie.genre))
-    if movie.rating:
-        lines.append("  <rating>%s</rating>" % movie.rating)
-    if movie.icon:
+
+    plot = value("plot", "description") or movie.plot
+    if plot:
+        lines.append("  <plot>%s</plot>" % _xml_escape(str(plot)))
+
+    # <premiered> is the whole reason for the detail call: Kodi derives its
+    # "Release date" sort order from this, and without it the only meaningful
+    # ordering left is by title. <year> alone does not give you that.
+    released = value("releasedate", "release_date")
+    year = movie.year
+    if released:
+        released = str(released)[:10]
+        lines.append("  <premiered>%s</premiered>" % _xml_escape(released))
+        if not year and len(released) >= 4 and released[:4].isdigit():
+            year = int(released[:4])
+    if year:
+        lines.append("  <year>%d</year>" % year)
+
+    genre = value("genre") or movie.genre
+    if genre:
+        # The provider comma-separates these; Kodi wants one element each.
+        for part in [g.strip() for g in str(genre).split(",") if g.strip()]:
+            lines.append("  <genre>%s</genre>" % _xml_escape(part))
+
+    director = value("director")
+    if director:
+        for part in [x.strip() for x in str(director).split(",") if x.strip()]:
+            lines.append("  <director>%s</director>" % _xml_escape(part))
+
+    country = value("country")
+    if country:
+        for part in [x.strip() for x in str(country).split(",") if x.strip()]:
+            lines.append("  <country>%s</country>" % _xml_escape(part))
+
+    runtime_secs = value("duration_secs")
+    if runtime_secs:
+        try:
+            lines.append("  <runtime>%d</runtime>" % round(int(runtime_secs) / 60))
+        except (TypeError, ValueError):
+            pass
+
+    rating = value("rating") or movie.rating
+    if rating:
+        lines.append("  <rating>%s</rating>" % _xml_escape(str(rating)))
+
+    tmdb_id = value("tmdb_id")
+    if tmdb_id:
+        # Lets Kodi (or a scraper run later) identify the film exactly instead
+        # of guessing from a title decorated with resolution/country suffixes.
+        lines.append('  <uniqueid type="tmdb">%s</uniqueid>' % _xml_escape(str(tmdb_id)))
+
+    trailer = value("youtube_trailer")
+    if trailer:
+        lines.append("  <trailer>%s</trailer>" % _xml_escape(str(trailer)))
+
+    for actor in [a.strip() for a in str(value("cast", "actors") or "").split(",") if a.strip()]:
+        lines.append("  <actor>")
+        lines.append("    <name>%s</name>" % _xml_escape(actor))
+        lines.append("  </actor>")
+
+    poster = value("movie_image", "cover_big") or movie.icon
+    if poster:
         lines.append('  <thumb aspect="poster">%s</thumb>'
-                     % _xml_escape(movie.icon + header_suffix(headers)))
+                     % _xml_escape(str(poster) + header_suffix(headers)))
+
+    backdrops = d.get("backdrop_path") or []
+    if isinstance(backdrops, str):
+        backdrops = [backdrops]
+    if backdrops:
+        lines.append("  <fanart>")
+        for art in backdrops[:3]:
+            lines.append("    <thumb>%s</thumb>"
+                         % _xml_escape(str(art) + header_suffix(headers)))
+        lines.append("  </fanart>")
+
     source_list = [sources] if isinstance(sources, str) else list(sources)
     for source in source_list:
         lines.append("  <tag>%s</tag>" % _xml_escape(source))
@@ -346,7 +457,8 @@ def _noop_error(path: str, exc: Exception) -> None:  # pragma: no cover - defaul
 
 def sync_movies(root: str, movies: Iterable[Tuple[str, Movie]], base_url: str,
                  on_error: ErrorFn = _noop_error,
-                 headers: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
+                 headers: Optional[Dict[str, str]] = None,
+                 details: Optional[Dict[str, dict]] = None) -> Tuple[int, int]:
     """``movies``: (source category name, movie) pairs. Returns ``(written, removed)``.
 
     A movie appearing under several *category* pairs collapses to a single
@@ -369,7 +481,8 @@ def sync_movies(root: str, movies: Iterable[Tuple[str, Movie]], base_url: str,
     wanted: Dict[str, str] = {}
     for primary_source, movie, sources in grouped.values():
         wanted[movie_strm_path(root, primary_source, movie)] = movie_strm_content(base_url, movie)
-        wanted[movie_nfo_path(root, primary_source, movie)] = movie_nfo_content(movie, sources, headers)
+        wanted[movie_nfo_path(root, primary_source, movie)] = movie_nfo_content(
+            movie, sources, headers, (details or {}).get(movie.id))
     written = 0
     for path, content in wanted.items():
         try:

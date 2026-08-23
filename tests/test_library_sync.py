@@ -485,3 +485,88 @@ def test_sync_request_is_consumed_exactly_once(tmp_path):
     request_sync(state_dir)
     assert take_sync_request(state_dir) is True
     assert take_sync_request(state_dir) is False
+
+
+REAL_VOD_INFO = {
+    # Shape confirmed against a real account's get_vod_info response.
+    "plot": "", "description": "Een korte beschrijving.",
+    "releasedate": "2026-04-24", "genre": "Drama, Romance",
+    "director": "Rodante Pajemna Jr.",
+    "cast": "Apphle Celso, Van Allen Ong",
+    "duration_secs": 4544, "rating": "3.8", "tmdb_id": "1669051",
+    "country": "Philippines",
+    "backdrop_path": ["https://image.tmdb.org/t/p/w1280/a2.jpg"],
+    "movie_image": "https://image.tmdb.org/t/p/w600/8z.jpg",
+}
+
+
+def test_movie_nfo_carries_premiered_so_kodi_can_sort_by_release_date():
+    """Kodi derives its "Release date" sort order from <premiered>. With only
+    <year> - which is all the VOD *list* endpoint offers, and often not even
+    that - the only meaningful ordering left is by title, and "date added"
+    means when we imported it, not when the film came out."""
+    from core.library_sync import movie_nfo_content
+
+    nfo = movie_nfo_content(movie(id="1"), ["Src"], None, REAL_VOD_INFO)
+
+    assert "<premiered>2026-04-24</premiered>" in nfo
+    assert "<year>2026</year>" in nfo, "year falls back out of the release date"
+
+
+def test_movie_nfo_splits_comma_separated_people_and_genres():
+    """The provider comma-separates these in one string; Kodi wants one
+    element each, or it renders "Drama, Romance" as a single genre."""
+    from core.library_sync import movie_nfo_content
+
+    nfo = movie_nfo_content(movie(id="1"), ["Src"], None, REAL_VOD_INFO)
+
+    assert "<genre>Drama</genre>" in nfo and "<genre>Romance</genre>" in nfo
+    assert "<name>Apphle Celso</name>" in nfo and "<name>Van Allen Ong</name>" in nfo
+    assert "<runtime>76</runtime>" in nfo, "duration_secs is seconds, runtime is minutes"
+    assert '<uniqueid type="tmdb">1669051</uniqueid>' in nfo
+
+
+def test_movie_nfo_stays_valid_without_details():
+    """A detail call that failed must thin the NFO, not break it - one
+    unreachable movie cannot be allowed to cost the whole catalogue."""
+    from core.library_sync import movie_nfo_content
+
+    nfo = movie_nfo_content(movie(id="1", name="Some Film"), ["Src"], None, None)
+
+    assert "<title>Some Film</title>" in nfo
+    assert "<premiered>" not in nfo and "<actor>" not in nfo
+    assert nfo.strip().endswith("</movie>")
+
+
+def test_collect_movie_details_skips_a_failing_movie(monkeypatch):
+    """One movie the provider chokes on must not abort the sweep."""
+    from core.library_sync import collect_movie_details
+
+    class Provider:
+        def movie_info(self, movie_id):
+            if movie_id == "bad":
+                raise RuntimeError("boom")
+            return {"info": {"releasedate": "2020-01-02"}}
+
+    pairs = [("Src", movie(id="bad")), ("Src", movie(id="good"))]
+    details = collect_movie_details(Provider(), pairs)
+
+    assert details["good"]["releasedate"] == "2020-01-02"
+    assert details["bad"] == {}
+
+
+def test_collect_movie_details_asks_once_per_movie_not_per_category():
+    """A film listed under six overlapping categories is still one film."""
+    from core.library_sync import collect_movie_details
+
+    calls = []
+
+    class Provider:
+        def movie_info(self, movie_id):
+            calls.append(movie_id)
+            return {"info": {}}
+
+    pairs = [("A", movie(id="7")), ("B", movie(id="7")), ("C", movie(id="7"))]
+    collect_movie_details(Provider(), pairs)
+
+    assert calls == ["7"]
