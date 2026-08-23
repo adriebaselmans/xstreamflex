@@ -18,13 +18,20 @@ from core.library_sync import (  # noqa: E402
     collect_shows_with_episodes,
     is_sync_stale,
     sync_episodes,
+    sync_lock,
     sync_movies,
+    take_sync_request,
     write_sync_state,
 )
 from core.proxy import ProxyServer  # noqa: E402
 from kodiui.context import Context  # noqa: E402
 
 CHECK_INTERVAL_SECONDS = 300
+
+# The loop wakes far more often than it works, so a sync asked for from the menu
+# starts within seconds rather than up to CHECK_INTERVAL_SECONDS later. Only the
+# cheap "is a request pending?" check runs at this cadence.
+POLL_INTERVAL_SECONDS = 5
 
 # How long a clean will wait for the scan queued before it. A first scan of a
 # catalogue this size runs for minutes, so the wait has to be generous; past that
@@ -34,14 +41,16 @@ CLEAN_SCAN_WAIT_SECONDS = 600
 CLEAN_SCAN_POLL_SECONDS = 5
 
 
-def _run_library_sync(context: Context, monitor: xbmc.Monitor) -> None:
+def _run_library_sync(context: Context, monitor: xbmc.Monitor,
+                       forced: bool = False) -> None:
     context.reload()
     config = context.store.active()
     if config is None or not config.is_complete:
         return
 
     interval_hours = max(1, context.setting_int("export_interval_hours", 6))
-    if not is_sync_stale(context.profile, config.id, interval_hours * 3600):
+    if not forced and not is_sync_stale(context.profile, config.id,
+                                        interval_hours * 3600):
         return
 
     if xbmc.Player().isPlaying():
@@ -59,6 +68,18 @@ def _run_library_sync(context: Context, monitor: xbmc.Monitor) -> None:
     headers = {"User-Agent": config.user_agent} if config.user_agent else {}
     if config.referer:
         headers["Referer"] = config.referer
+
+    with sync_lock(context.profile) as acquired:
+        if not acquired:
+            context.log("debug", "library sync skipped: another sync is running")
+            return
+        _sync_and_scan(context, monitor, config, country, headers)
+
+
+def _sync_and_scan(context: Context, monitor: xbmc.Monitor, config, country,
+                    headers) -> None:
+    def on_error(path, exc):
+        context.log("warning", "library sync: skipped %s (%s)" % (path, exc))
 
     try:
         provider, _ = context.provider(config)
@@ -200,9 +221,22 @@ def main() -> None:
             if context.setting_bool("library_sync_enabled", True):
                 _run_library_sync(context, monitor)
 
+    since_last_check = 0
     while not monitor.abortRequested():
-        if monitor.waitForAbort(CHECK_INTERVAL_SECONDS):
+        if monitor.waitForAbort(POLL_INTERVAL_SECONDS):
             break
+        since_last_check += POLL_INTERVAL_SECONDS
+
+        # A sync asked for from the menu runs even if nothing is stale yet -
+        # that is the whole point of asking.
+        if take_sync_request(context.profile):
+            if context.setting_bool("library_sync_enabled", True):
+                _run_library_sync(context, monitor, forced=True)
+            continue
+
+        if since_last_check < CHECK_INTERVAL_SECONDS:
+            continue
+        since_last_check = 0
         if context.setting_bool("export_enabled", True):
             _run_export(context)
         if context.setting_bool("library_sync_enabled", True):

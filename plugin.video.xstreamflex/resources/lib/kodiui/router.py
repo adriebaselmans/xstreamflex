@@ -25,6 +25,8 @@ from core.library_sync import (
     sync_episodes,
     sync_movies,
     write_sync_state,
+    request_sync,
+    sync_lock,
 )
 from core.models import SERIES, VOD, Episode
 from . import dialogs, listing, play
@@ -371,54 +373,27 @@ def export(context: Context, params) -> None:
 
 @route("sync_library")
 def sync_library(context: Context, params) -> None:
-    """Writes .strm files for VOD/series so a local folder can be added as a
-    Kodi video source. See core/library_sync.py for why: Kodi's own "add a
-    plugin:// URL as a library source" mechanism is unreliable for a catalogue
-    this size, and .strm files sidestep that scanning entirely."""
-    country = params.get("country", "NL")
-    provider, config = _require_provider(context)
-    headers = _image_headers(config)
+    """Hands the sync to the background service and returns immediately.
 
-    movies_root = os.path.join(context.library_dir, "movies")
-    series_root = os.path.join(context.library_dir, "series")
+    This used to do the work inline. It cannot: a sync of this catalogue runs
+    for minutes, and Kodi resolves a plugin:// directory listing under a
+    timeout while showing a modal busy spinner. Live, that ended in
+    "GetDirectory - Error getting plugin://...?action=sync_library" and a
+    spinner in the Videos window that no button would dismiss - the add-on
+    looked hung while Kodi itself was fine and idle (JSONRPC.Ping answered).
 
-    progress = xbmcgui.DialogProgress()
-    progress.create("XstreamFlex", "Syncing library…")
+    The service thread has no such timeout, already owns the scheduled sync,
+    and running both there is what makes concurrent syncs impossible.
+    """
+    _require_provider(context)
 
-    def movie_progress(index, total, name):
-        if progress.iscanceled():
-            raise ProviderError("Library sync cancelled.")
-        progress.update(int(index * 40 / max(1, total)),
-                        "Movies: category %d of %d\n%s" % (index, total, name))
-
-    def series_progress(index, total, name):
-        if progress.iscanceled():
-            raise ProviderError("Library sync cancelled.")
-        progress.update(40 + int(index * 60 / max(1, total)),
-                        "Series: show %d of %d\n%s" % (index, total, name))
-
-    def on_error(path, exc):
-        context.log("warning", "library sync: skipped %s (%s)" % (path, exc))
-
-    try:
-        all_movies = collect_movies(provider, country, progress=movie_progress)
-        movies_written, movies_removed = sync_movies(
-            movies_root, all_movies, context.base_url, on_error=on_error, headers=headers)
-
-        shows = collect_shows_with_episodes(provider, country, progress=series_progress)
-        series_written, series_removed = sync_episodes(
-            series_root, shows, context.base_url, on_error=on_error, headers=headers)
-    finally:
-        progress.close()
-
-    write_sync_state(context.profile, config.id, movies_written=movies_written,
-                     movies_removed=movies_removed, series_written=series_written,
-                     series_removed=series_removed)
-    context.log("info", "library sync: movies +%d/-%d, series +%d/-%d -> %s"
-                % (movies_written, movies_removed, series_written, series_removed,
-                   context.library_dir))
-    dialogs.notify("Movies: +%d/-%d. Series: +%d/-%d."
-                   % (movies_written, movies_removed, series_written, series_removed))
+    with sync_lock(context.profile) as acquired:
+        running = not acquired
+    if running:
+        dialogs.notify("A library sync is already running.")
+    else:
+        request_sync(context.profile)
+        dialogs.notify("Library sync started in the background.")
     if context.handle >= 0:
         xbmcplugin.endOfDirectory(context.handle, succeeded=True)
 

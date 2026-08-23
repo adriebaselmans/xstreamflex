@@ -15,10 +15,12 @@ open when it "plays" that "file".
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import time
+from contextlib import contextmanager
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 from xml.sax.saxutils import escape as _xml_escape
@@ -449,7 +451,81 @@ def write_sync_state(state_dir: str, provider_id: str, *, movies_written: int,
     }
     try:
         os.makedirs(state_dir, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
+        # Written via a temp file + rename, which is atomic on POSIX. A plain
+        # open("w") is not: two syncs finishing together (the scheduled one and
+        # a manual one) interleaved their writes and left trailing braces in
+        # the JSON. last_sync_time() then read that as ValueError -> 0 ->
+        # "never synced" -> a full sync on *every* startup, forever. The lock
+        # below makes concurrent syncs impossible; this makes a torn write
+        # impossible even if a process dies mid-save.
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
             json.dump(state, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
     except OSError:
         pass
+
+
+#: Held for the whole of a sync. Two syncs at once do the same tens of
+#: thousands of writes twice and race on the state file - which is exactly
+#: what happened live: the service's scheduled sync and a manual one from the
+#: menu both finished in the same second, on different threads.
+LOCK_FILE = "library-sync.lock"
+
+#: Written by the menu action, consumed by the service. A sync of this
+#: catalogue takes minutes, and Kodi resolves a plugin:// directory listing
+#: with a timeout while showing a modal busy spinner - so running it inline
+#: ends in "GetDirectory - Error getting plugin://..." and a spinner that
+#: never goes away. The work belongs on the service thread instead.
+REQUEST_FILE = "library-sync-requested"
+
+
+@contextmanager
+def sync_lock(state_dir: str):
+    """Yields True if this caller got the lock, False if a sync is already
+    running. Never blocks: the caller decides whether to skip or report.
+
+    flock is released by the kernel when the process dies or the fd closes, so
+    a crashed sync cannot leave a lock behind that needs manual clearing.
+    """
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        handle = open(os.path.join(state_dir, LOCK_FILE), "w")
+    except OSError:
+        # Can't create the lock file - run unlocked rather than never syncing.
+        yield True
+        return
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def request_sync(state_dir: str) -> None:
+    """Ask the service to sync on its next tick."""
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        with open(os.path.join(state_dir, REQUEST_FILE), "w") as handle:
+            handle.write("1")
+    except OSError:
+        pass
+
+
+def take_sync_request(state_dir: str) -> bool:
+    """Consume a pending request, if any. Removing it before the sync runs (not
+    after) means a request that crashes the sync is not retried forever."""
+    try:
+        os.remove(os.path.join(state_dir, REQUEST_FILE))
+        return True
+    except OSError:
+        return False
