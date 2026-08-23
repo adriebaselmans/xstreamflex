@@ -242,9 +242,9 @@ def test_sync_episodes_skips_a_failing_item_and_keeps_going(tmp_path, monkeypatc
         root, shows, "plugin://plugin.video.xstreamflex/",
         on_error=lambda path, exc: errors.append((path, exc)),
     )
-    # "bad show": its tvshow.nfo and its one episode both fail.
-    assert written == 2  # good show's tvshow.nfo + its one episode
-    assert len(errors) == 2
+    # "bad show": its tvshow.nfo and its one episode's .strm/.nfo all fail.
+    assert written == 3  # good show's tvshow.nfo + its episode's .strm and .nfo
+    assert len(errors) == 3
 
 
 def test_sync_movies_on_error_defaults_to_a_silent_noop(tmp_path, monkeypatch):
@@ -330,7 +330,7 @@ def test_sync_episodes_nests_directly_by_show_no_source_folder_and_is_idempotent
              [episode(id="10", season=1, episode=1), episode(id="11", season=1, episode=2)])]
 
     written, removed = sync_episodes(root, shows, "plugin://plugin.video.xstreamflex/")
-    assert written == 3  # tvshow.nfo + 2 episodes
+    assert written == 5  # tvshow.nfo + 2 episodes x (.strm + .nfo)
     assert removed == 0
     assert os.path.isdir(os.path.join(root, "Show One"))
     assert os.path.isfile(os.path.join(root, "Show One", "tvshow.nfo"))
@@ -348,7 +348,7 @@ def test_sync_episodes_removes_episodes_dropped_from_the_provider(tmp_path):
     written, removed = sync_episodes(
         root, [("Src", series(name="Show One"), [episode(id="10")])],
         "plugin://plugin.video.xstreamflex/")
-    assert removed == 1
+    assert removed == 2  # the dropped episode's .strm and its .nfo
 
 
 def test_movie_strm_path_includes_the_id_to_avoid_collisions(tmp_path):
@@ -414,3 +414,29 @@ def test_unencodable_path_skips_one_item_not_the_whole_sync(tmp_path, monkeypatc
     assert written > 0, "the encodable title must still be written"
     assert calls, "the failing path must be reported through on_error"
     assert all("Amelie" in path for path in calls)
+
+
+def test_sync_episodes_writes_an_nfo_beside_every_episode(tmp_path):
+    """Without a per-episode NFO Kodi adds the show and none of its episodes.
+
+    Its scanner only calls AddVideo() straight away when it finds an episode
+    NFO; otherwise it needs an episode guide, which neither an online scraper
+    (no <episodeguide> in our tvshow.nfo) nor the local scraper (excluded from
+    guide fetching) can supply, and it skips the episode entirely. This was
+    live: 2391 shows in the library, 0 episodes.
+    """
+    root = str(tmp_path)
+    shows = [("NL | Netflix", series(name="Show One"),
+              [episode(id="10", season=2, episode=7, title="Ep Title")])]
+    sync_episodes(root, shows, "plugin://plugin.video.xstreamflex/")
+
+    strm = [p for p in os.listdir(os.path.join(root, "Show One"))
+            if p.endswith(".strm")][0]
+    nfo_path = os.path.join(root, "Show One", strm[: -len(".strm")] + ".nfo")
+    assert os.path.isfile(nfo_path), "episode .nfo must sit beside its .strm"
+
+    content = open(nfo_path, encoding="utf-8").read()
+    assert "<episodedetails>" in content
+    assert "<season>2</season>" in content
+    assert "<episode>7</episode>" in content
+    assert "<title>Ep Title</title>" in content
