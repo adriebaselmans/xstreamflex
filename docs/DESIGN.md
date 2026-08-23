@@ -441,6 +441,30 @@ that failure mode entirely — no match to find, nothing to fail. Poster/cover U
 `|Header=value` suffix (`core.http.header_suffix`) as every other request to this provider, since Kodi
 fetches NFO-referenced art itself, outside any hand-off this add-on otherwise controls.
 
+`clean_title` strips the provider's stream bookkeeping off the `<title>` that NFO carries — a trailing
+country/language marker (`(NL)`, `(ENG)`, `(NL AUDIO)`), a resolution marker (`4K`, `UHD`, `1080p`),
+and a trailing release year that `<year>`/`<premiered>` already hold: `"The Old Guard 2 - 4K - 2025
+(NL)"` becomes `"The Old Guard 2"`. It touches **only** the NFO title. Every path this module builds
+still derives from the raw provider name, because an existing library is six figures of files named
+that way and cleaning the paths would rewrite and rescan all of them for a cosmetic gain; filename
+uniqueness never depended on the decorations either, since the provider id is already in the filename.
+
+Stripping is tail-anchored and repeats until nothing more comes off, which is what lets one rule cover
+the provider's freely varying order and separators while leaving the same words alone inside a title.
+The guards are the point, and each one is a real title from the live 7.8k-name catalogue: `3D` is not
+in the resolution vocabulary (`Jackass 3D`, `Saw 3D` are released titles, sitting right beside
+`Saw 4K`); a trailing year is only stripped when it is a plausible release year (≤ this year + 1), so
+`Blade Runner 2049` and `Dracula 3000` keep theirs; a second four-digit number in front of it means a
+range, not a label (`Atatürk 1881 - 1919`); a year glued to a date is left alone (`26.01.2024`); a
+title that *is* a marker or a year survives whole (`4K`, `1922`); and only an all-caps bracket group
+reads as a marker, so `(Extended Cut)` and `(Sneeuwengelen)` stay — with `US`/`UK` explicitly kept,
+because those disambiguate a remake rather than label a stream.
+
+The title is cleaned from the *list* name rather than taken from `get_vod_info`'s own `name`/`o_name`:
+`o_name` is the original-language title (as often Korean or Cyrillic as useful, for a Dutch
+catalogue), and `name` only exists for movies whose detail call succeeded, which would leave the
+library titled two different ways depending on which calls happened to work.
+
 `safe_filename`'s `max_length`, and `_budget_for`'s per-path length budget computed from the actual
 `root` passed in, exist because a real provider was observed returning an episode `title` that is
 already a fully-formatted `"<Show> - S01E02 - <Real Title>"` string — doubled against this module's

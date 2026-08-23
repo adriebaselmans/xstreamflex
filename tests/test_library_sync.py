@@ -2,6 +2,7 @@ import os
 
 from core.library_sync import (
     _MAX_PATH,
+    clean_title,
     episode_strm_content,
     episode_strm_path,
     is_sync_stale,
@@ -106,7 +107,7 @@ def test_movie_nfo_path_matches_the_strm_basename(tmp_path):
 
 def test_movie_nfo_content_has_title_and_source_tag():
     content = movie_nfo_content(movie(), "NL | Videoland")
-    assert "<title>Some Movie (NL)</title>" in content
+    assert "<title>Some Movie</title>" in content, "the (NL) marker is not a title"
     assert "<tag>NL | Videoland</tag>" in content
     assert content.startswith('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
 
@@ -570,3 +571,178 @@ def test_collect_movie_details_asks_once_per_movie_not_per_category():
     collect_movie_details(Provider(), pairs)
 
     assert calls == ["7"]
+
+
+# -- clean_title: what goes in <title>, and what must survive untouched --------
+#
+# Every example below is taken from the live 7.8k-title catalogue unless it is
+# marked as a guard case. The cost of being wrong is asymmetric: a title that
+# keeps a stray "4K" is mildly ugly, a title that lost a real word is a film
+# the user can no longer find by name.
+
+
+def test_clean_title_strips_the_trailing_country_marker():
+    assert clean_title("USS Christmas (NL)") == "USS Christmas"
+    assert clean_title("Kesong Puti (NL)") == "Kesong Puti"
+    assert clean_title("Sex Education (ENG)") == "Sex Education"
+    assert clean_title("Ann Droid (NL)") == "Ann Droid"
+
+
+def test_clean_title_strips_the_less_common_markers_too():
+    """All of these appear as trailing bracket groups in the live catalogue."""
+    assert clean_title("Culprits (NL AUDIO)") == "Culprits"
+    assert clean_title("Iets (NL GESPROKEN)") == "Iets"
+    assert clean_title("Iets (NLGESPROKEN)") == "Iets"
+    assert clean_title("Iets (NL-BE)") == "Iets"
+    assert clean_title("Iets (MULTI)") == "Iets"
+    assert clean_title("Iets (BE)") == "Iets"
+
+
+def test_clean_title_strips_a_resolution_marker():
+    assert clean_title("Aquaman and the Lost Kingdom 4K (NL)") == \
+        "Aquaman and the Lost Kingdom"
+    assert clean_title("Avengers: Age of Ultron 4K (NL)") == "Avengers: Age of Ultron"
+    assert clean_title("Some Film 1080p (NL)") == "Some Film"
+    assert clean_title("Some Film UHD (NL)") == "Some Film"
+
+
+def test_clean_title_unwinds_a_whole_run_of_decorations():
+    """The provider mixes separators and order freely; stripping repeats from
+    the tail until nothing more comes off, which is what makes one rule cover
+    all four of these shapes."""
+    assert clean_title("Ballerina 4K 2025 (NL)") == "Ballerina"
+    assert clean_title("Karate Kid: Legends  - 4K - 2025 (NL)") == "Karate Kid: Legends"
+    assert clean_title("The Old Guard 2 - 4K - 2025 (NL)") == "The Old Guard 2"
+    assert clean_title("The Avengers - 4K - (NL)") == "The Avengers"
+    assert clean_title("Thunderbolts* - 4K (NL)") == "Thunderbolts*"
+
+
+def test_clean_title_strips_a_trailing_year_in_either_form():
+    """<year>/<premiered> already carry this, and it sorts badly in Kodi."""
+    assert clean_title("Megan Is Missing 2011 (NL)") == "Megan Is Missing"
+    assert clean_title("Aftermath - 2024 (NL)") == "Aftermath"
+    assert clean_title("Ook dat nog! (2025) (NL)") == "Ook dat nog!"
+
+
+def test_clean_title_keeps_a_year_that_is_part_of_the_title():
+    """"Blade Runner 2049" is the whole reason the year rule has an upper
+    bound: it sits exactly where a provider-appended year sits, and only the
+    fact that no film released today can carry it tells the two apart."""
+    assert clean_title("Blade Runner 2049 (NL)") == "Blade Runner 2049"
+    assert clean_title("2073 (NL)") == "2073"
+    assert clean_title("Dracula 3000 (NL)") == "Dracula 3000"
+
+
+def test_clean_title_keeps_a_year_that_is_not_at_the_end():
+    assert clean_title("2001: A Space Odyssey (NL)") == "2001: A Space Odyssey"
+    assert clean_title("Moto3 2026 Great Britain (ENG)") == "Moto3 2026 Great Britain"
+
+
+def test_clean_title_keeps_a_title_that_is_only_a_year():
+    """Stripping would leave nothing at all, so it does not."""
+    assert clean_title("1922 (NL)") == "1922"
+    assert clean_title("2010 (NL)") == "2010"
+
+
+def test_clean_title_keeps_a_year_range():
+    """A second four-digit number in front of it means a span, not a stream
+    label - and the bracketed form must not be half-eaten into "(1972"."""
+    assert clean_title("Atatürk 1881 - 1919 (NL)") == "Atatürk 1881 - 1919"
+    assert clean_title("1992 - 2024 (NL)") == "1992 - 2024"
+    assert clean_title("Glen Campbell | Live Anthology (1972-2001) (NL)") == \
+        "Glen Campbell | Live Anthology (1972-2001)"
+
+
+def test_clean_title_keeps_a_year_that_is_the_end_of_a_date():
+    assert clean_title("AEW Rampage - 26.01.2024 (NL)") == "AEW Rampage - 26.01.2024"
+
+
+def test_clean_title_keeps_3d_because_it_is_part_of_real_titles():
+    """"Jackass 3D" and "Saw 3D" are the released titles; "Saw 4K" is not.
+    Both shapes are in the same catalogue, which is why 3D is not in the
+    resolution vocabulary."""
+    assert clean_title("Jackass 3D (NL)") == "Jackass 3D"
+    assert clean_title("Saw 3D (NL)") == "Saw 3D"
+    assert clean_title("Saw 4K (NL)") == "Saw"
+
+
+def test_clean_title_keeps_a_title_that_is_nothing_but_a_marker():
+    """A film genuinely called "4K" keeps its name rather than losing it."""
+    assert clean_title("4K") == "4K"
+    assert clean_title("HD") == "HD"
+
+
+def test_clean_title_keeps_punctuation_heavy_real_titles():
+    assert clean_title("'Allo 'Allo! (NL)") == "'Allo 'Allo!"
+    assert clean_title("#BringBackAlice (NL)") == "#BringBackAlice"
+    assert clean_title("Se7en (NL)") == "Se7en"
+    assert clean_title("11.22.63 (NL)") == "11.22.63"
+    assert clean_title("*batteries not included (NL)") == "*batteries not included"
+    assert clean_title("$POSITIONS (NL)") == "$POSITIONS"
+
+
+def test_clean_title_keeps_a_mixed_case_bracket_group():
+    """Only an all-caps code reads as a stream marker. Everything else in a
+    trailing bracket in the live catalogue was part of the title."""
+    assert clean_title("Billie Eilish: Live at the O2 (Extended Cut) (NL)") == \
+        "Billie Eilish: Live at the O2 (Extended Cut)"
+    assert clean_title("Snöänglar (Sneeuwengelen) (NL)") == \
+        "Snöänglar (Sneeuwengelen)"
+    assert clean_title("Bruce Springsteen: In Concert/MTV (Un)Plugged (NL)") == \
+        "Bruce Springsteen: In Concert/MTV (Un)Plugged"
+
+
+def test_clean_title_keeps_us_and_uk_because_they_disambiguate_a_remake():
+    """"The Office (US)" is a different show from "The Office"; "(NL)" is the
+    same film with a Dutch stream. The provider's own markers here are
+    NL/ENG/BE, so the two never collide in practice."""
+    assert clean_title("The Office (US)") == "The Office (US)"
+    assert clean_title("Ghosts (UK)") == "Ghosts (UK)"
+    assert clean_title("The Office US 2005 (NL)") == "The Office US"
+    assert clean_title("Shameless USA (NL)") == "Shameless USA"
+
+
+def test_clean_title_survives_degenerate_input():
+    assert clean_title("") == ""
+    assert clean_title("   ") == ""
+    assert clean_title(None) == ""
+    assert clean_title("  Spaced   Out  (NL) ") == "Spaced Out"
+
+
+def test_clean_title_does_not_reach_into_a_path(tmp_path):
+    """The whole point of confining this to the NFO: an existing library is
+    six figures of files whose names came from the raw provider title. If
+    cleaning ever leaked into a path, every one of them would be rewritten and
+    rescanned for a cosmetic gain."""
+    root = str(tmp_path)
+    m = movie(id="1379605", name="Ballerina 4K 2025 (NL)")
+
+    assert movie_strm_path(root, "Src", m).endswith(
+        os.path.join("Src", "Ballerina 4K 2025 (NL) (1379605).strm"))
+    assert show_nfo_path(root, "Ann Droid (NL)") == os.path.join(
+        root, "Ann Droid (NL)", "tvshow.nfo")
+
+
+def test_clean_title_does_not_cost_filename_uniqueness(tmp_path):
+    """Uniqueness rides on the provider id in the filename, not on the
+    decorations - two movies that clean to the same title still get their own
+    files."""
+    root = str(tmp_path)
+    a = movie(id="1", name="Culprits (NL)")
+    b = movie(id="2", name="Culprits (ENG)")
+
+    assert movie_strm_path(root, "Src", a) != movie_strm_path(root, "Src", b)
+
+
+def test_movie_nfo_title_is_cleaned_but_the_strm_url_is_not():
+    """The play URL carries the provider's own name through to playback; only
+    what Kodi displays is cleaned."""
+    m = movie(id="7", name="Aquaman and the Lost Kingdom 4K (NL)")
+
+    assert "<title>Aquaman and the Lost Kingdom</title>" in movie_nfo_content(m, "Src")
+    assert "4K" in movie_strm_content("http://plugin", m)
+
+
+def test_show_nfo_title_is_cleaned():
+    content = show_nfo_content(series(name="'Allo 'Allo! (NL)"), "NL | Netflix")
+    assert "<title>'Allo 'Allo!</title>" in content
