@@ -139,6 +139,112 @@ _MAX_PATH = 240
 _MIN_COMPONENT = 8
 
 
+#: Trailing decorations the provider hangs off a title, stripped from what goes
+#: in the NFO's <title> only - never from a path (see clean_title).
+#:
+#: Quality markers deliberately exclude "3D": the live catalogue carries
+#: "Jackass 3D" and "Saw 3D", where it is part of the released title, right
+#: beside "Saw 4K", where it is not.
+_QUALITY_TAIL = re.compile(
+    r"(?i)(?:^|(?<=[\s\-\u2013\u2014|]))(?:4K|UHD|FHD|HD|SD|HDR|2160[pi]|1080[pi]|720[pi]|480[pi])\s*$"
+)
+#: Punctuation left dangling once a marker in the middle of a run is removed:
+#: "The Old Guard 2 - 4K - 2025 (NL)" sheds the year, then "-", then "4K", then
+#: "-" again before it is finished.
+_SEPARATOR_TAIL = re.compile(r"[\s\-\u2013\u2014|,:;/]+$")
+#: A country/language marker in brackets at the very end: "(NL)", "(ENG)",
+#: "(NL-BE)", "(NL AUDIO)", "(MULTI)" - every trailing bracket group in a real
+#: 7.8k-title catalogue was one of these or a year, and the ones that were
+#: neither ("(Extended Cut)", "(Live in 3D)", "(Sneeuwengelen)") are all mixed
+#: case, which this deliberately does not match.
+_MARKER_TAIL = re.compile(r"\s*\(\s*([A-Z][A-Z \-/]{0,14})\s*\)\s*$")
+#: Kept because they disambiguate a remake rather than label a stream: "The
+#: Office (US)", "Ghosts (UK)". The provider's own markers here are NL/ENG/BE.
+_MARKER_KEEP = {"US", "UK"}
+#: A bare year at the very end ("Ballerina 4K 2025"), and the same thing in
+#: brackets ("Ook dat nog! (2025)"). Kept as two patterns rather than one with
+#: an optional bracket, so a bracketed *range* - "Live Anthology (1972-2001)" -
+#: cannot be half-eaten into an unbalanced "Live Anthology (1972". A year
+#: glued to a date ("AEW Rampage - 26.01.2024") is not a trailing year either.
+_YEAR_TAIL = re.compile(r"^(.*?)(?<![\d,./])((?:19|20)\d\d)$")
+_YEAR_BRACKET_TAIL = re.compile(r"^(.*?)\(\s*((?:19|20)\d\d)\s*\)$")
+
+
+def _plausible_year(year: int) -> bool:
+    """A release year, not a number that happens to have four digits.
+
+    "Blade Runner 2049" is the case this exists for: 2049 sits exactly where a
+    provider-appended year sits, and the only thing separating the two is that
+    no film released today can carry it. The upper bound therefore moves with
+    the clock; a catalogue browsed in 2049 would start trimming that title, and
+    that is the cheaper mistake to make.
+    """
+    return 1900 <= year <= time.localtime().tm_year + 1
+
+
+def _strip_year_tail(text: str) -> str:
+    bracketed = _YEAR_BRACKET_TAIL.match(text)
+    match = bracketed or _YEAR_TAIL.match(text)
+    if not match:
+        return text
+    head, year = match.group(1), int(match.group(2))
+    if not _plausible_year(year):
+        return text
+    if bracketed and head.count("(") != head.count(")"):
+        # The bracket belongs to something else - leaving a stray "(" behind
+        # would be worse than leaving the year alone.
+        return text
+    head = _SEPARATOR_TAIL.sub("", head)
+    if not head:
+        # The title *is* the year: "1922", "2010", "2073". Nothing to strip.
+        return text
+    if re.search(r"\d\d\d\d$", head):
+        # A range, not a decoration: "Atatürk 1881 - 1919", "1992 - 2024".
+        return text
+    return head
+
+
+def clean_title(name: str) -> str:
+    """Strips the provider's stream decorations off a display title.
+
+    The catalogue names titles for its own bookkeeping - "Aquaman and the Lost
+    Kingdom 4K (NL)", "The Old Guard 2 - 4K - 2025 (NL)" - which is what Kodi
+    then shows and sorts on. Only the <title> written into the NFO uses this:
+    every path this module builds still derives from the raw provider name, and
+    changing that would rewrite (and make Kodi rescan) an entire existing
+    library of six-figure file counts for a cosmetic gain. Filename uniqueness
+    does not depend on the decorations either - movie_strm_path and
+    episode_strm_path already carry the provider id.
+
+    Stripping is tail-anchored and repeated until nothing more comes off, so a
+    run of markers unwinds ("... - 4K - 2025 (NL)") while the same words inside
+    a title are untouched ("2001: A Space Odyssey", "Blade Runner 2049",
+    "The Office US 2005" keeps the US). If a name is nothing but markers the
+    original is returned rather than an empty title.
+    """
+    text = re.sub(r"\s+", " ", (name or "")).strip()
+    if not text:
+        return ""
+
+    while True:
+        before = text
+        marker = _MARKER_TAIL.search(text)
+        if marker and marker.group(1).replace(" ", "").replace("-", "").replace("/", "") \
+                not in _MARKER_KEEP:
+            candidate = text[: marker.start()].strip()
+            if candidate:
+                text = candidate
+        text = _SEPARATOR_TAIL.sub("", text)
+        text = _QUALITY_TAIL.sub("", text).strip()
+        text = _SEPARATOR_TAIL.sub("", text)
+        text = _strip_year_tail(text)
+        text = _SEPARATOR_TAIL.sub("", text)
+        if text == before:
+            break
+
+    return text.strip() or (name or "").strip()
+
+
 def safe_filename(name: str, fallback: str = "untitled", max_length: int = 80) -> str:
     """Strip characters a Windows or POSIX filesystem would reject, and cap the
     length. Also strips trailing dots/spaces, which Windows rejects in a path
@@ -226,7 +332,14 @@ def movie_nfo_content(movie: Movie, sources, headers: Optional[Dict[str, str]] =
         return None
 
     lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', "<movie>"]
-    lines.append("  <title>%s</title>" % _xml_escape(movie.name))
+    # Cleaned from the list name rather than taken from details' own "name"/
+    # "o_name": "o_name" is the original-language title, which for a Dutch
+    # catalogue is as often Korean or Cyrillic as it is useful, and "name" is
+    # only present for movies whose detail call succeeded - sourcing the title
+    # from it would leave the library titled two different ways depending on
+    # which calls happened to work. clean_title handles that shape anyway
+    # ("Kesong Puti (2026)" -> "Kesong Puti") if it is ever fed one.
+    lines.append("  <title>%s</title>" % _xml_escape(clean_title(movie.name)))
 
     plot = value("plot", "description") or movie.plot
     if plot:
@@ -341,7 +454,7 @@ def show_nfo_content(show: Series, source: str, headers: Optional[Dict[str, str]
     for why a self-contained NFO is used at all rather than relying on an
     online scraper match."""
     lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', "<tvshow>"]
-    lines.append("  <title>%s</title>" % _xml_escape(show.name))
+    lines.append("  <title>%s</title>" % _xml_escape(clean_title(show.name)))
     if show.plot:
         lines.append("  <plot>%s</plot>" % _xml_escape(show.plot))
     if show.year:
