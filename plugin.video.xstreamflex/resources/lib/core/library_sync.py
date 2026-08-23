@@ -245,6 +245,52 @@ def show_nfo_content(show: Series, source: str, headers: Optional[Dict[str, str]
     return "\n".join(lines) + "\n"
 
 
+def episode_nfo_path(root: str, source: str, show_name: str, episode: Episode) -> str:
+    """Same base name as episode_strm_path, ``.nfo`` instead of ``.strm``."""
+    strm_path = episode_strm_path(root, source, show_name, episode)
+    return strm_path[: -len(".strm")] + ".nfo"
+
+
+def episode_nfo_content(episode: Episode, headers: Optional[Dict[str, str]] = None) -> str:
+    """One NFO per episode. Without this, Kodi adds the *show* but not a single
+    episode, and the library looks silently half-broken.
+
+    Kodi's scanner (VideoInfoScanner::OnProcessSeriesFolder) only reaches
+    AddVideo() directly when a per-episode NFO is found. With no NFO it falls
+    through to matching the file against an episode guide, and:
+
+      * an online scraper needs ``<episodeguide>`` in tvshow.nfo to fetch one -
+        which show_nfo_content deliberately does not emit, because these shows
+        are provider catalogue entries that frequently do not match TMDB at all
+        (same reason movie_nfo_content exists);
+      * the local scraper is excluded from guide fetching outright
+        (``scraper->ID() != "metadata.local"``).
+
+    Either way it hits ``if (episodes.empty()) { ...; continue; }`` and logs
+    "Asked to lookup episode ... online, but we have either no episode guide or
+    we are using the local scraper", skipping every episode. Shipping the NFO
+    takes that whole path out of play, and lets the source be scanned with
+    "Local information only" so a sync never touches the network.
+    """
+    lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+             "<episodedetails>"]
+    lines.append("  <title>%s</title>" % _xml_escape(episode.title))
+    lines.append("  <season>%d</season>" % episode.season)
+    lines.append("  <episode>%d</episode>" % episode.episode)
+    if episode.plot:
+        lines.append("  <plot>%s</plot>" % _xml_escape(episode.plot))
+    if episode.rating:
+        lines.append("  <rating>%s</rating>" % episode.rating)
+    if episode.duration:
+        # Kodi reads <runtime> in whole minutes; the provider gives seconds.
+        lines.append("  <runtime>%d</runtime>" % round(episode.duration / 60))
+    if episode.thumb:
+        lines.append('  <thumb>%s</thumb>'
+                     % _xml_escape(episode.thumb + header_suffix(headers)))
+    lines.append("</episodedetails>")
+    return "\n".join(lines) + "\n"
+
+
 def episode_strm_content(base_url: str, episode: Episode) -> str:
     return "%s?action=play_episode&episode_id=%s&ext=%s&title=%s" % (
         base_url.rstrip("/"), quote(episode.id, safe=""),
@@ -356,6 +402,8 @@ def sync_episodes(root: str, shows: Iterable[Tuple[str, Series, Iterable[Episode
         for episode in episodes:
             path = episode_strm_path(root, source, show.name, episode)
             wanted[path] = episode_strm_content(base_url, episode)
+            wanted[episode_nfo_path(root, source, show.name, episode)] = \
+                episode_nfo_content(episode, headers)
     written = 0
     for path, content in wanted.items():
         try:
