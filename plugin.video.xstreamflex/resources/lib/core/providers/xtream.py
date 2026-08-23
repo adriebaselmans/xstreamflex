@@ -21,6 +21,7 @@ from ..cache import (
     TTL_ACCOUNT,
     TTL_CATEGORIES,
     TTL_CHANNELS,
+    TTL_IMMUTABLE,
     TTL_METADATA,
     TTL_SHORT_EPG,
     cached,
@@ -185,8 +186,10 @@ class XtreamProvider(BaseProvider):
         return result
 
     def movie_info(self, movie_id: str) -> dict:
+        # TTL_IMMUTABLE, not TTL_METADATA: see cache.py. A movie's metadata is
+        # fixed, and the library sync asks for every title in the catalogue.
         payload = cached(
-            self.cache, self._key("movie_info", movie_id), TTL_METADATA,
+            self.cache, self._key("movie_info", movie_id), TTL_IMMUTABLE,
             lambda: self._call("get_vod_info", vod_id=movie_id), self._log,
         )
         return payload if isinstance(payload, dict) else {}

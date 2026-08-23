@@ -21,6 +21,16 @@ TTL_CHANNELS = 21600
 TTL_METADATA = 604800
 TTL_SHORT_EPG = 900
 
+# A film's own facts - release date, director, cast, runtime - do not change
+# once it exists, so re-fetching them buys nothing and costs a lot: the whole
+# catalogue was cached in one sweep, so every entry also expires in one sweep,
+# and a 5.5k-title library then spends ~12 minutes re-asking the provider
+# questions it has already answered. Ten years is "never" for this box while
+# still being a real number rather than a special case in the expiry logic.
+# Deliberately NOT used for series: a show gains episodes, so series_info has
+# to keep expiring on TTL_METADATA.
+TTL_IMMUTABLE = 315360000
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
     key        TEXT PRIMARY KEY,
