@@ -193,3 +193,20 @@ def test_get_php_is_never_called():
     assert client.calls, "expected the provider to make requests"
     assert all("get.php" not in url for url, _, _ in client.calls)
     assert all(url.endswith("/player_api.php") for url, _, _ in client.calls)
+
+
+def test_movie_info_is_cached_far_longer_than_series_info():
+    """A film's facts never change, so re-asking costs 12 minutes of provider
+    calls for nothing. A *show* gains episodes, so it must keep expiring - the
+    two must not share a TTL.
+    """
+    import inspect
+
+    from core.cache import TTL_IMMUTABLE, TTL_METADATA
+    from core.providers import xtream
+
+    assert TTL_IMMUTABLE > TTL_METADATA * 50
+
+    assert "TTL_IMMUTABLE" in inspect.getsource(xtream.XtreamProvider.movie_info)
+    assert "TTL_METADATA" in inspect.getsource(xtream.XtreamProvider.series_info)
+    assert "TTL_IMMUTABLE" not in inspect.getsource(xtream.XtreamProvider.series_info)
